@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && cp -r src/generated dist/generated",
     "dev": "nest start --watch",
     "dev:worker": "tsx watch src/worker/main.ts",
     "start": "node dist/main.js",

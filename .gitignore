@@ -9,7 +9,7 @@ build/
 coverage/
 .DS_Store
 pnpm-lock.yaml.bak
-/storage-data/
+storage-data/
 /apps/api/src/generated/
 *.tsbuildinfo
 playwright-report/

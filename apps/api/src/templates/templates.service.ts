@@ -2,13 +2,17 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 import { Queue } from "bullmq";
 import { Inject } from "@nestjs/common";
 import { findNodeById, type SceneGraph } from "@psd-studio/scene-graph";
+import { SceneCompositor } from "@psd-studio/psd-engine";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
+import { DbBackedAssetSource } from "../rendering/db-asset-source";
 import { INGESTION_QUEUE_TOKEN } from "../queue/queue.module";
 import type { IngestionJobData } from "../queue/queue.constants";
 import { AssetOwnerType, IngestStatus, TemplateStatus } from "../generated/prisma";
 import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateTemplateDto } from "./dto/template.dto";
+
+const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
 
 const PSD_MAGIC = Buffer.from("8BPS", "ascii");
 export const MAX_PSD_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -111,6 +115,15 @@ export class TemplatesService {
       throw new BadRequestException(`Template version is not ready (status: ${version.ingestStatus}).`);
     }
     return version.sceneGraph as unknown as SceneGraph;
+  }
+
+  /** Renders the template exactly as authored, no field overrides — the admin's field-mapping preview. */
+  async preview(templateId: string, versionId: string): Promise<{ dataUrl: string }> {
+    const sceneGraph = await this.getSceneGraph(templateId, versionId);
+    const scale = Math.min(1, ADMIN_PREVIEW_MAX_DIMENSION / Math.max(sceneGraph.width, sceneGraph.height));
+    const compositor = new SceneCompositor(new DbBackedAssetSource(this.prisma, this.storage));
+    const result = await compositor.render(sceneGraph, { scale });
+    return { dataUrl: `data:image/png;base64,${result.png.toString("base64")}` };
   }
 
   async listFields(templateId: string, versionId: string) {

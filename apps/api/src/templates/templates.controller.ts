@@ -63,6 +63,11 @@ export class TemplatesController {
     return this.templates.listFields(id, versionId);
   }
 
+  @Get(":id/versions/:versionId/preview")
+  preview(@Param("id") id: string, @Param("versionId") versionId: string) {
+    return this.templates.preview(id, versionId);
+  }
+
   @Roles(...ADMIN_ROLES)
   @Post(":id/versions/:versionId/fields")
   createField(

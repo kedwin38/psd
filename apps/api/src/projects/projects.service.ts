@@ -73,7 +73,9 @@ export class ProjectsService {
   async uploadImage(projectId: string, fieldId: string, userId: string, file: { buffer: Buffer; mimetype: string }) {
     const project = await this.getOwned(projectId, userId);
     const field = await this.prisma.templateField.findFirst({ where: { id: fieldId, templateVersionId: project.templateVersionId } });
-    if (!field || field.fieldType !== "IMAGE") throw new BadRequestException("Not an image field for this project's template.");
+    if (!field || (field.fieldType !== "IMAGE" && field.fieldType !== "SMART_OBJECT")) {
+      throw new BadRequestException("Not an image or smart-object field for this project's template.");
+    }
     const constraints = field.constraints as unknown as ImageFieldConstraints;
 
     const sniffed = sniffImageMime(file.buffer);
