@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "echo \"(no lint configured for e2e)\""
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.9",

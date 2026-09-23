@@ -1,0 +1,99 @@
+name: psd-template-studio
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: psdstudio
+      POSTGRES_PASSWORD: psdstudio_dev_pw
+      POSTGRES_DB: psdstudio
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psdstudio"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: build
+    working_dir: /repo/apps/api
+    command: ["pnpm", "exec", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://psdstudio:psdstudio_dev_pw@postgres:5432/psdstudio?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://psdstudio:psdstudio_dev_pw@postgres:5432/psdstudio?schema=public
+      REDIS_URL: redis://redis:6379
+      STORAGE_LOCAL_PATH: /app/storage-data
+    volumes:
+      - storage-data:/app/storage-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["node", "dist/worker/main.js"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://psdstudio:psdstudio_dev_pw@postgres:5432/psdstudio?schema=public
+      REDIS_URL: redis://redis:6379
+      STORAGE_LOCAL_PATH: /app/storage-data
+    volumes:
+      - storage-data:/app/storage-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: http://localhost:3000/api/v1
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  storage-data:
