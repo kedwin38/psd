@@ -15,6 +15,7 @@ import cookieParser from "cookie-parser";
 // Using the same `require` for both sides keeps one shared module cache.
 export const requireDist = createRequire(__filename);
 const { AppModule } = requireDist("../dist/app.module");
+const { WorkerModule } = requireDist("../dist/worker/worker.module");
 const { PrismaService } = requireDist("../dist/prisma/prisma.service");
 
 export async function createTestApp(): Promise<INestApplication> {
@@ -22,6 +23,14 @@ export async function createTestApp(): Promise<INestApplication> {
   const app = moduleRef.createNestApplication();
   app.use(cookieParser());
   app.setGlobalPrefix("api/v1");
+  await app.init();
+  return app;
+}
+
+/** Bootstraps the ingestion/render worker's own module graph (not part of AppModule). */
+export async function createWorkerTestApp(): Promise<INestApplication> {
+  const moduleRef = await Test.createTestingModule({ imports: [WorkerModule] }).compile();
+  const app = moduleRef.createNestApplication();
   await app.init();
   return app;
 }
