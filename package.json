@@ -13,8 +13,9 @@
     "dev:web": "pnpm --filter @psd-studio/web run dev",
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
-    "test": "pnpm -r run test",
+    "test": "pnpm -r --filter=!@psd-studio/e2e run test",
     "test:unit": "pnpm --filter @psd-studio/psd-engine run test",
+    "test:e2e": "pnpm --filter @psd-studio/e2e run test",
     "prisma:generate": "pnpm --filter @psd-studio/api run prisma:generate",
     "prisma:migrate": "pnpm --filter @psd-studio/api run prisma:migrate"
   },

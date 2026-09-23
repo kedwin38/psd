@@ -6,12 +6,13 @@
   "scripts": {
     "build": "nest build && cp -r src/generated dist/generated",
     "dev": "nest start --watch",
-    "dev:worker": "tsx watch src/worker/main.ts",
+    "dev:worker:build": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "dev:worker": "node --watch dist/worker/main.js",
     "start": "node dist/main.js",
     "start:worker": "node dist/worker/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "echo \"(no lint configured for api)\"",
-    "test": "vitest run --config vitest.config.ts",
+    "test": "npm run build && vitest run --config vitest.config.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy"
