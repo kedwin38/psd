@@ -8,7 +8,7 @@ WORKDIR /repo
 
 # --- deps: install the whole workspace (cached separately from source) ---
 FROM base AS deps
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY packages/scene-graph/package.json packages/scene-graph/package.json
 COPY packages/psd-engine/package.json packages/psd-engine/package.json
 COPY apps/api/package.json apps/api/package.json
