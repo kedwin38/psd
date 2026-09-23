@@ -10,6 +10,15 @@ const EnvSchema = z.object({
   API_PORT: z.coerce.number().int().positive().default(3000),
   API_PUBLIC_URL: z.string().default("http://localhost:3000"),
   CORS_ORIGIN: z.string().min(1),
+  // Railway/Cloudflare front the app with a reverse proxy in production; without
+  // this, req.ip (used for rate limiting and the audit log) would be the proxy's
+  // address for every request, not the caller's — breaking both.
+  // (z.coerce.boolean() would treat the string "false" as truthy, so a plain
+  // string enum + explicit mapping is used instead.)
+  TRUST_PROXY: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),

@@ -10,6 +10,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { cors: false });
   const config = app.get(ConfigService<Env, true>);
 
+  if (config.get("TRUST_PROXY")) {
+    app.getHttpAdapter().getInstance().set("trust proxy", 1);
+  }
   app.use(helmet());
   app.use(cookieParser());
   app.enableCors({
