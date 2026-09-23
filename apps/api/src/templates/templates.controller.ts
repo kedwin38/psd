@@ -22,6 +22,12 @@ export class TemplatesController {
     return this.templates.listPublished(categoryId);
   }
 
+  @Roles(...ADMIN_ROLES)
+  @Get("admin/all")
+  listAllForAdmin() {
+    return this.templates.listAllForAdmin();
+  }
+
   @Public()
   @Get(":id")
   get(@Param("id") id: string) {

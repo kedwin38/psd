@@ -26,6 +26,13 @@ export class TemplatesService {
     @Inject(INGESTION_QUEUE_TOKEN) private readonly ingestionQueue: Queue<IngestionJobData>,
   ) {}
 
+  async listAllForAdmin() {
+    return this.prisma.template.findMany({
+      include: { currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } }, versions: { select: { id: true, versionNo: true, ingestStatus: true }, orderBy: { versionNo: "desc" } } },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
   async listPublished(categoryId?: string) {
     return this.prisma.template.findMany({
       where: { status: TemplateStatus.PUBLISHED, ...(categoryId ? { categoryId } : {}) },
