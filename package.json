@@ -1,0 +1,24 @@
+{
+  "name": "psd-template-studio",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm -r --filter=./packages/** --filter=./apps/** run build",
+    "dev:api": "pnpm --filter @psd-studio/api run dev",
+    "dev:worker": "pnpm --filter @psd-studio/api run dev:worker",
+    "dev:web": "pnpm --filter @psd-studio/web run dev",
+    "lint": "pnpm -r run lint",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:unit": "pnpm --filter @psd-studio/psd-engine run test",
+    "prisma:generate": "pnpm --filter @psd-studio/api run prisma:generate",
+    "prisma:migrate": "pnpm --filter @psd-studio/api run prisma:migrate"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
