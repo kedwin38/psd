@@ -5,8 +5,11 @@
     "moduleResolution": "Node",
     "outDir": "dist",
     "rootDir": "src",
-    "lib": ["ES2022", "DOM"],
-    "isolatedModules": false
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "isolatedModules": false,
+    "strictPropertyInitialization": false,
+    "baseUrl": "./"
   },
   "include": ["src"]
 }

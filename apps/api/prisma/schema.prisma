@@ -1,0 +1,394 @@
+// PSD Template Studio — primary data model (spec §8).
+// Postgres is the system of record for everything except large binary assets,
+// which live in object storage and are referenced here by storage key only.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & access
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  SUPER_ADMIN
+  CONTENT_ADMIN
+  ORG_ADMIN
+  AUDITOR
+  END_USER
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+model Organization {
+  id         String   @id @default(uuid())
+  name       String
+  planTier   String   @default("free")
+  seatLimit  Int      @default(5)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  users           User[]
+  projects        Project[]
+  roleAssignments UserRoleAssignment[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  displayName  String
+  status       UserStatus @default(PENDING_VERIFICATION)
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
+
+  // Password is optional and secondary to WebAuthn (spec §12) — never sufficient
+  // alone for an admin role; enforced in the auth service, not just the schema.
+  passwordHash String?
+
+  mfaEnrolled  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roles             UserRoleAssignment[]
+  webAuthnCredentials WebAuthnCredential[]
+  totpCredential     TotpCredential?
+  refreshTokens      RefreshToken[]
+  projects           Project[]
+  templatesAuthored  TemplateVersion[] @relation("TemplateVersionCreatedBy")
+  auditLogEntries    AuditLogEntry[]
+  exportJobsRequested ExportJob[] @relation("ExportJobRequestedBy")
+
+  @@map("users")
+}
+
+// A user can hold several roles, each optionally scoped to one organization
+// and/or one category (e.g. a Content Admin scoped to "Certificates" only).
+model UserRoleAssignment {
+  id             String   @id @default(uuid())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  role           RoleName
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
+  category       TemplateCategory? @relation(fields: [categoryId], references: [id])
+  categoryId     String?
+  createdAt      DateTime @default(now())
+
+  @@unique([userId, role, organizationId, categoryId])
+  @@index([userId])
+  @@map("user_role_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Auth: WebAuthn / TOTP / refresh token rotation (spec §12)
+// ---------------------------------------------------------------------------
+
+model WebAuthnCredential {
+  id            String   @id @default(uuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  credentialId  String   @unique
+  publicKey     Bytes
+  counter       BigInt   @default(0)
+  transports    String[]
+  deviceLabel   String?
+  createdAt     DateTime @default(now())
+  lastUsedAt    DateTime?
+
+  @@index([userId])
+  @@map("webauthn_credentials")
+}
+
+model TotpCredential {
+  id           String   @id @default(uuid())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String   @unique
+  // Encrypted at rest (envelope-encrypted with the app's KMS-backed key in prod).
+  secretCipher String
+  verifiedAt   DateTime?
+  recoveryCodesHash String[]
+  createdAt    DateTime @default(now())
+
+  @@map("totp_credentials")
+}
+
+// One row per issued refresh token FAMILY member. Rotation + reuse detection
+// (spec §12): each refresh mints a new row and revokes the old one; if a
+// revoked token is presented again, the whole family is revoked.
+model RefreshToken {
+  id            String   @id @default(uuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  familyId      String
+  tokenHash     String   @unique
+  issuedAt      DateTime @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  replacedByHash String?
+  ip            String?
+  userAgent     String?
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Templates (spec §8, §10)
+// ---------------------------------------------------------------------------
+
+enum TemplateStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum TemplateVisibility {
+  PUBLIC
+  ORG_RESTRICTED
+  PLAN_TIER
+}
+
+model TemplateCategory {
+  id          String   @id @default(uuid())
+  name        String
+  parent      TemplateCategory? @relation("CategoryTree", fields: [parentId], references: [id])
+  parentId    String?
+  children    TemplateCategory[] @relation("CategoryTree")
+  visibility  TemplateVisibility @default(PUBLIC)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  templates       Template[]
+  roleAssignments UserRoleAssignment[]
+
+  @@map("template_categories")
+}
+
+model Template {
+  id                String   @id @default(uuid())
+  category          TemplateCategory @relation(fields: [categoryId], references: [id])
+  categoryId        String
+  name              String
+  status            TemplateStatus @default(DRAFT)
+  visibilityScope   TemplateVisibility @default(PUBLIC)
+  currentVersion    TemplateVersion? @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  currentVersionId  String? @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  versions TemplateVersion[] @relation("TemplateVersions")
+  projects Project[]
+
+  @@index([categoryId])
+  @@map("templates")
+}
+
+enum IngestStatus {
+  PENDING
+  PARSING
+  READY
+  FAILED
+}
+
+model TemplateVersion {
+  id             String   @id @default(uuid())
+  template       Template @relation("TemplateVersions", fields: [templateId], references: [id], onDelete: Cascade)
+  templateId     String
+  versionNo      Int
+  psdAsset       Asset    @relation(fields: [psdAssetId], references: [id])
+  psdAssetId     String
+  // The normalized Scene Graph (packages/scene-graph) produced by ingestion.
+  sceneGraph     Json?
+  nativeDpi      Int?
+  colorProfile   String?
+  ingestStatus   IngestStatus @default(PENDING)
+  ingestWarnings Json?
+  ingestError    String?
+  createdBy      User?    @relation("TemplateVersionCreatedBy", fields: [createdById], references: [id])
+  createdById    String?
+  publishedAt    DateTime?
+  createdAt      DateTime @default(now())
+
+  fields        TemplateField[]
+  currentOfTemplate Template? @relation("CurrentVersion")
+  projects      Project[]
+
+  @@unique([templateId, versionNo])
+  @@map("template_versions")
+}
+
+enum FieldType {
+  TEXT
+  IMAGE
+  VISIBILITY
+  SMART_OBJECT
+}
+
+model TemplateField {
+  id                String   @id @default(uuid())
+  templateVersion   TemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  templateVersionId String
+  // Stable node id from the scene graph (nodes.ts#idFromPath).
+  nodeId            String
+  layerPath         String
+  fieldType         FieldType
+  label             String
+  order             Int      @default(0)
+  constraints       Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  values ProjectFieldValue[]
+
+  @@unique([templateVersionId, nodeId])
+  @@map("template_fields")
+}
+
+// ---------------------------------------------------------------------------
+// Assets (spec §8) — binary content lives in object storage; this row is the
+// pointer + integrity/metadata record.
+// ---------------------------------------------------------------------------
+
+enum AssetOwnerType {
+  TEMPLATE_SOURCE
+  TEMPLATE_LAYER
+  USER_UPLOAD
+  EXPORT_OUTPUT
+}
+
+model Asset {
+  id          String   @id @default(uuid())
+  ownerType   AssetOwnerType
+  storageKey  String   @unique
+  mimeType    String
+  checksumSha256 String
+  sizeBytes   Int
+  width       Int?
+  height      Int?
+  createdAt   DateTime @default(now())
+
+  templateVersions TemplateVersion[]
+  exportJobs       ExportJob[] @relation("ExportOutputAsset")
+
+  @@map("assets")
+}
+
+// ---------------------------------------------------------------------------
+// Projects (end-user editing sessions) & exports (spec §8, §13)
+// ---------------------------------------------------------------------------
+
+enum ProjectStatus {
+  IN_PROGRESS
+  EXPORTED
+}
+
+model Project {
+  id                String   @id @default(uuid())
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String
+  organization      Organization? @relation(fields: [organizationId], references: [id])
+  organizationId    String?
+  template          Template @relation(fields: [templateId], references: [id])
+  templateId        String
+  templateVersion   TemplateVersion @relation(fields: [templateVersionId], references: [id])
+  templateVersionId String
+  name              String
+  status            ProjectStatus @default(IN_PROGRESS)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  fieldValues ProjectFieldValue[]
+  exportJobs  ExportJob[]
+
+  @@index([userId])
+  @@map("projects")
+}
+
+// A field-value delta layered on top of the template version's scene graph —
+// never a raster copy (spec §8 key relationship).
+model ProjectFieldValue {
+  id              String   @id @default(uuid())
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId       String
+  templateField   TemplateField @relation(fields: [templateFieldId], references: [id])
+  templateFieldId String
+  // A FieldOverride (packages/scene-graph#fields.ts), validated at the API boundary.
+  value           Json
+  updatedAt       DateTime @updatedAt
+
+  @@unique([projectId, templateFieldId])
+  @@map("project_field_values")
+}
+
+enum ExportStatus {
+  QUEUED
+  RENDERING
+  COMPLETE
+  FAILED
+}
+
+enum ExportFormat {
+  PNG
+  JPEG
+  PDF
+  TIFF
+}
+
+model ExportJob {
+  id            String   @id @default(uuid())
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  requestedBy   User     @relation("ExportJobRequestedBy", fields: [requestedById], references: [id])
+  requestedById String
+  status        ExportStatus @default(QUEUED)
+  outputFormat  ExportFormat
+  outputDpi     Int
+  outputAsset   Asset?   @relation("ExportOutputAsset", fields: [outputAssetId], references: [id])
+  outputAssetId String?
+  error         String?
+  idempotencyKey String? @unique
+  queuedAt      DateTime @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  @@index([projectId])
+  @@index([requestedById])
+  @@map("export_jobs")
+}
+
+// ---------------------------------------------------------------------------
+// Audit log — append-only, hash-chained (spec §12, §17)
+// ---------------------------------------------------------------------------
+
+model AuditLogEntry {
+  id           String   @id @default(uuid())
+  actor        User?    @relation(fields: [actorId], references: [id])
+  actorId      String?
+  action       String
+  resourceType String
+  resourceId   String?
+  ip           String?
+  userAgent    String?
+  metadata     Json?
+  prevHash     String
+  hash         String   @unique
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+  @@map("audit_log_entries")
+}

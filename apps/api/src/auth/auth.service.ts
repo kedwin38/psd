@@ -1,0 +1,206 @@
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
+import { AuditService } from "../audit/audit.service";
+import { PasswordService } from "./password.service";
+import { TotpService } from "./totp.service";
+import { TokenService } from "./token.service";
+import { WebAuthnService } from "./webauthn.service";
+import type { AuthenticatedUser } from "./auth.types";
+import { RoleName, UserStatus } from "../generated/prisma";
+
+export interface RequestContext {
+  ip?: string;
+  userAgent?: string;
+}
+
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  refreshTokenExpiresAt: Date;
+}
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly password: PasswordService,
+    private readonly totp: TotpService,
+    private readonly tokens: TokenService,
+    private readonly webauthn: WebAuthnService,
+    private readonly audit: AuditService,
+  ) {}
+
+  async loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser> {
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { roles: true },
+    });
+    return {
+      id: user.id,
+      email: user.email,
+      roles: [...new Set(user.roles.map((r) => r.role))],
+      organizationId: user.organizationId,
+      steppedUp: false,
+    };
+  }
+
+  private isAdminRole(roles: RoleName[]): boolean {
+    return roles.some((r) => r !== RoleName.END_USER);
+  }
+
+  async register(email: string, displayName: string, ctx: RequestContext): Promise<{ userId: string }> {
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new ConflictException("An account with this email already exists.");
+
+    // v1 limitation (documented): no SMTP/email provider is wired up in this
+    // environment, so there is no email-verification step yet — accounts are
+    // created ACTIVE and must add a passkey (or password+TOTP) before any
+    // privileged action. Wiring a transactional email provider is tracked as
+    // a follow-up, not silently skipped.
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        displayName,
+        status: UserStatus.ACTIVE,
+        roles: { create: { role: RoleName.END_USER } },
+      },
+    });
+    await this.audit.record({
+      actorId: user.id,
+      action: "auth.register",
+      resourceType: "User",
+      resourceId: user.id,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+    return { userId: user.id };
+  }
+
+  async findUserIdByEmail(email: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) throw new BadRequestException("No account with this email.");
+    return user.id;
+  }
+
+  // --- Passkey (primary) login -------------------------------------------------
+
+  async passkeyLoginOptions(email: string) {
+    const userId = await this.findUserIdByEmail(email);
+    return this.webauthn.generateAuthenticationOptionsFor(userId, "authentication");
+  }
+
+  async passkeyLoginVerify(email: string, response: object, ctx: RequestContext): Promise<TokenPair> {
+    const userId = await this.findUserIdByEmail(email);
+    await this.webauthn.verifyAuthentication(userId, response as never, "authentication");
+    return this.issueSessionFor(userId, "auth.login.passkey", ctx);
+  }
+
+  async passkeyRegisterOptions(userId: string, email: string, displayName: string) {
+    return this.webauthn.generateRegistrationOptionsFor(userId, email, displayName);
+  }
+
+  async passkeyRegisterVerify(userId: string, response: object, deviceLabel: string | undefined, ctx: RequestContext): Promise<void> {
+    await this.webauthn.verifyRegistration(userId, response as never, deviceLabel);
+    await this.audit.record({
+      actorId: userId,
+      action: "auth.passkey.registered",
+      resourceType: "WebAuthnCredential",
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+  }
+
+  // --- Password + TOTP (fallback) login ----------------------------------------
+  // Policy: a password login ALWAYS requires a second TOTP factor — there is
+  // no single-step password-only login path for any role (spec §12: no
+  // password-only path, especially not for admins; we hold every role to the
+  // same bar rather than special-casing it).
+
+  async setPassword(userId: string, password: string): Promise<void> {
+    const hash = await this.password.hash(password);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash } });
+  }
+
+  async passwordLoginStart(email: string, password: string, ctx: RequestContext): Promise<{ pendingToken: string }> {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || !user.passwordHash) throw new UnauthorizedException("Invalid email or password.");
+    const ok = await this.password.verify(user.passwordHash, password);
+    if (!ok) {
+      await this.audit.record({ actorId: user.id, action: "auth.login.password.failed", resourceType: "User", resourceId: user.id, ip: ctx.ip, userAgent: ctx.userAgent });
+      throw new UnauthorizedException("Invalid email or password.");
+    }
+    const enrolled = await this.totp.isEnrolled(user.id);
+    if (!enrolled) {
+      throw new ForbiddenException("Password login requires TOTP to be enrolled on this account. Enroll TOTP or use a passkey.");
+    }
+    return { pendingToken: this.tokens.issuePendingMfaToken(user.id) };
+  }
+
+  async passwordLoginVerifyTotp(pendingToken: string, code: string, ctx: RequestContext): Promise<TokenPair> {
+    const { sub: userId } = this.tokens.verifyPendingMfaToken(pendingToken);
+    const ok = await this.totp.verifyCode(userId, code);
+    if (!ok) {
+      await this.audit.record({ actorId: userId, action: "auth.login.totp.failed", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+      throw new UnauthorizedException("Invalid TOTP code.");
+    }
+    return this.issueSessionFor(userId, "auth.login.password_totp", ctx);
+  }
+
+  // --- Step-up (re-authentication for sensitive admin actions, spec §12) -------
+
+  async stepUpOptions(userId: string) {
+    return this.webauthn.generateAuthenticationOptionsFor(userId, "step-up");
+  }
+
+  async stepUpVerify(userId: string, response: object, ctx: RequestContext): Promise<{ stepUpToken: string }> {
+    await this.webauthn.verifyAuthentication(userId, response as never, "step-up");
+    await this.audit.record({ actorId: userId, action: "auth.stepup.verified", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+    return { stepUpToken: this.tokens.issueStepUpToken(userId) };
+  }
+
+  // --- Session issuance / refresh / logout -------------------------------------
+
+  private async issueSessionFor(userId: string, auditAction: string, ctx: RequestContext): Promise<TokenPair> {
+    const authUser = await this.loadAuthenticatedUser(userId);
+    const accessToken = this.tokens.issueAccessToken(authUser);
+    const refresh = await this.tokens.issueRefreshToken(userId, { ip: ctx.ip, userAgent: ctx.userAgent });
+    await this.audit.record({ actorId: userId, action: auditAction, resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+    return { accessToken, refreshToken: refresh.raw, refreshTokenExpiresAt: refresh.expiresAt };
+  }
+
+  async refresh(rawRefreshToken: string, ctx: RequestContext): Promise<TokenPair> {
+    const { userId, issued } = await this.tokens.rotateRefreshToken(rawRefreshToken, ctx);
+    const authUser = await this.loadAuthenticatedUser(userId);
+    const accessToken = this.tokens.issueAccessToken(authUser);
+    return { accessToken, refreshToken: issued.raw, refreshTokenExpiresAt: issued.expiresAt };
+  }
+
+  async logout(rawRefreshToken: string | undefined, userId: string, ctx: RequestContext): Promise<void> {
+    if (rawRefreshToken) await this.tokens.revokeRefreshToken(rawRefreshToken);
+    await this.audit.record({ actorId: userId, action: "auth.logout", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+  }
+
+  async logoutAllSessions(userId: string, ctx: RequestContext): Promise<void> {
+    await this.tokens.revokeAllSessionsForUser(userId);
+    await this.audit.record({ actorId: userId, action: "auth.logout_all", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+  }
+
+  async listSessions(userId: string) {
+    return this.tokens.listActiveSessions(userId);
+  }
+
+  async revokeSession(userId: string, sessionId: string, ctx: RequestContext): Promise<void> {
+    await this.tokens.revokeSessionById(userId, sessionId);
+    await this.audit.record({ actorId: userId, action: "auth.session.revoked", resourceType: "RefreshToken", resourceId: sessionId, ip: ctx.ip, userAgent: ctx.userAgent });
+  }
+
+  // --- TOTP enrollment passthroughs --------------------------------------------
+
+  async totpEnrollOptions(userId: string, email: string) {
+    return this.totp.beginEnrollment(userId, email);
+  }
+
+  async totpEnrollVerify(userId: string, code: string) {
+    return this.totp.confirmEnrollment(userId, code);
+  }
+}

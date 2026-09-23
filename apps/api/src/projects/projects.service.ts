@@ -1,0 +1,150 @@
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import sharp from "sharp";
+import { SceneCompositor } from "@psd-studio/psd-engine";
+import type { ImageFieldConstraints, TextFieldConstraints } from "@psd-studio/scene-graph";
+import { PrismaService } from "../prisma/prisma.service";
+import { AuditService } from "../audit/audit.service";
+import { StorageService } from "../storage/storage.service";
+import { DbBackedAssetSource } from "../rendering/db-asset-source";
+import { loadFieldOverrides } from "../rendering/field-overrides";
+import { AssetOwnerType, TemplateStatus } from "../generated/prisma";
+import type { CreateProjectDto, PatchFieldValueDto } from "./dto/project.dto";
+
+const PREVIEW_MAX_DIMENSION = 1000;
+const ALLOWED_UPLOAD_SIGNATURES: Array<{ mime: string; bytes: number[] }> = [
+  { mime: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47] },
+  { mime: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
+];
+
+function sniffImageMime(buffer: Buffer): string | null {
+  for (const sig of ALLOWED_UPLOAD_SIGNATURES) {
+    if (buffer.subarray(0, sig.bytes.length).equals(Buffer.from(sig.bytes))) return sig.mime;
+  }
+  // WebP: "RIFF"...."WEBP"
+  if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") {
+    return "image/webp";
+  }
+  return null;
+}
+
+@Injectable()
+export class ProjectsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly storage: StorageService,
+  ) {}
+
+  async create(dto: CreateProjectDto, userId: string, organizationId: string | null) {
+    const template = await this.prisma.template.findUnique({ where: { id: dto.templateId } });
+    if (!template || template.status !== TemplateStatus.PUBLISHED || !template.currentVersionId) {
+      throw new BadRequestException("Template is not published.");
+    }
+    const project = await this.prisma.project.create({
+      data: {
+        userId,
+        organizationId,
+        templateId: template.id,
+        templateVersionId: template.currentVersionId,
+        name: dto.name,
+      },
+    });
+    await this.audit.record({ actorId: userId, action: "project.created", resourceType: "Project", resourceId: project.id });
+    return project;
+  }
+
+  private async getOwned(projectId: string, userId: string) {
+    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
+    if (!project) throw new NotFoundException("Project not found.");
+    if (project.userId !== userId) throw new ForbiddenException("You do not own this project.");
+    return project;
+  }
+
+  async get(projectId: string, userId: string) {
+    const project = await this.getOwned(projectId, userId);
+    const fieldValues = await this.prisma.projectFieldValue.findMany({ where: { projectId }, include: { templateField: true } });
+    return { ...project, fieldValues };
+  }
+
+  async listMine(userId: string) {
+    return this.prisma.project.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } });
+  }
+
+  async uploadImage(projectId: string, fieldId: string, userId: string, file: { buffer: Buffer; mimetype: string }) {
+    const project = await this.getOwned(projectId, userId);
+    const field = await this.prisma.templateField.findFirst({ where: { id: fieldId, templateVersionId: project.templateVersionId } });
+    if (!field || field.fieldType !== "IMAGE") throw new BadRequestException("Not an image field for this project's template.");
+    const constraints = field.constraints as unknown as ImageFieldConstraints;
+
+    const sniffed = sniffImageMime(file.buffer);
+    if (!sniffed || !constraints.allowedMimeTypes.includes(sniffed as never)) {
+      throw new BadRequestException("Unsupported or unrecognized image file type.");
+    }
+    if (file.buffer.length > constraints.maxUploadBytes) {
+      throw new BadRequestException(`Image exceeds the ${constraints.maxUploadBytes} byte limit for this field.`);
+    }
+
+    const metadata = await sharp(file.buffer).metadata();
+    if (!metadata.width || !metadata.height) throw new BadRequestException("Could not read image dimensions.");
+    if (metadata.width < constraints.minWidthPx || metadata.height < constraints.minHeightPx) {
+      throw new BadRequestException(`Image must be at least ${constraints.minWidthPx}x${constraints.minHeightPx}px.`);
+    }
+
+    const asset = await this.storage.storeAsset({
+      data: file.buffer,
+      mimeType: sniffed,
+      ownerType: AssetOwnerType.USER_UPLOAD,
+      hint: `project_${projectId}_field_${fieldId}`,
+      width: metadata.width,
+      height: metadata.height,
+    });
+    return { assetId: asset.id, width: metadata.width, height: metadata.height };
+  }
+
+  async patchField(projectId: string, fieldId: string, dto: PatchFieldValueDto, userId: string) {
+    const project = await this.getOwned(projectId, userId);
+    const field = await this.prisma.templateField.findFirst({ where: { id: fieldId, templateVersionId: project.templateVersionId } });
+    if (!field) throw new NotFoundException("Field not found on this project's template version.");
+
+    this.assertValueMatchesField(field.fieldType, field.constraints, dto);
+
+    if (dto.type === "image") {
+      const asset = await this.prisma.asset.findUnique({ where: { id: dto.imageAssetId } });
+      if (!asset || asset.ownerType !== AssetOwnerType.USER_UPLOAD) {
+        throw new BadRequestException("Unknown uploaded image asset; upload it first via /projects/:id/uploads.");
+      }
+    }
+
+    const value = await this.prisma.projectFieldValue.upsert({
+      where: { projectId_templateFieldId: { projectId, templateFieldId: fieldId } },
+      create: { projectId, templateFieldId: fieldId, value: dto as object },
+      update: { value: dto as object },
+    });
+    await this.prisma.project.update({ where: { id: projectId }, data: { updatedAt: new Date() } });
+    return value;
+  }
+
+  private assertValueMatchesField(fieldType: string, constraintsJson: unknown, dto: PatchFieldValueDto): void {
+    if (fieldType === "TEXT" && dto.type === "text") {
+      const c = constraintsJson as TextFieldConstraints;
+      if (dto.text.length > c.maxLength) throw new BadRequestException(`Text exceeds the ${c.maxLength} character limit for this field.`);
+      if (c.required && dto.text.trim().length === 0) throw new BadRequestException("This field is required.");
+      return;
+    }
+    if ((fieldType === "IMAGE" || fieldType === "SMART_OBJECT") && dto.type === "image") return;
+    if (fieldType === "VISIBILITY" && dto.type === "visibility") return;
+    throw new BadRequestException(`Value type "${dto.type}" does not match field type "${fieldType}".`);
+  }
+
+  async preview(projectId: string, userId: string): Promise<{ dataUrl: string }> {
+    const project = await this.getOwned(projectId, userId);
+    const version = await this.prisma.templateVersion.findUniqueOrThrow({ where: { id: project.templateVersionId } });
+    const sceneGraph = version.sceneGraph as unknown as import("@psd-studio/scene-graph").SceneGraph;
+    const overrides = await loadFieldOverrides(this.prisma, projectId);
+
+    const scale = Math.min(1, PREVIEW_MAX_DIMENSION / Math.max(sceneGraph.width, sceneGraph.height));
+    const compositor = new SceneCompositor(new DbBackedAssetSource(this.prisma, this.storage));
+    const result = await compositor.render(sceneGraph, { scale, overrides });
+    return { dataUrl: `data:image/png;base64,${result.png.toString("base64")}` };
+  }
+}
