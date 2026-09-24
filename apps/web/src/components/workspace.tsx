@@ -201,6 +201,7 @@ export function Popover({
   open: controlledOpen,
   onOpenChange,
   className = "",
+  anchorClassName = "",
 }: {
   trigger: (props: { onClick: () => void; "aria-expanded": boolean; "aria-haspopup": "dialog" }) => ReactNode;
   children: ReactNode;
@@ -208,6 +209,7 @@ export function Popover({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   className?: string;
+  anchorClassName?: string;
 }) {
   const [innerOpen, setInnerOpen] = useState(false);
   const open = controlledOpen ?? innerOpen;
@@ -233,7 +235,7 @@ export function Popover({
   }, [open, setOpen]);
 
   return (
-    <span className="popover-anchor" ref={ref}>
+    <span className={`popover-anchor ${anchorClassName}`} ref={ref}>
       {trigger({ onClick: () => setOpen(!open), "aria-expanded": open, "aria-haspopup": "dialog" })}
       {open && (
         <div className={`popover${align === "start" ? " align-start" : ""} ${className}`} role="dialog">
@@ -249,6 +251,7 @@ export type Shortcut = readonly [action: string, keys: readonly string[]];
 export function ShortcutsButton({ shortcuts }: { shortcuts: readonly Shortcut[] }) {
   return (
     <Popover
+      anchorClassName="shortcuts-anchor"
       trigger={(props) => (
         <button type="button" className="icon-btn" aria-label="Keyboard shortcuts" data-tip="Shortcuts & gestures" data-tip-align="end" {...props}>
           <Keyboard size={18} aria-hidden="true" />

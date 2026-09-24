@@ -63,7 +63,10 @@ export function TemplateWorkspacePage() {
   const [publishing, setPublishing] = useState(false);
   const [saved, setSaved] = useState(false);
   const canvasRef = useRef<SceneCanvasHandle>(null);
-  const commands = useCommandStack((err) => setError(errorMessage(err)));
+  const commands = useCommandStack((err) => {
+    setError(errorMessage(err));
+    setSaved(false);
+  });
   const leftPanel = usePanel("admin-layers", 272, 236);
   const rightPanel = usePanel("admin-inspector", 320, 280);
 
