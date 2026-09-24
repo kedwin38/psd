@@ -10,6 +10,7 @@ export interface TextMeasure {
 export interface TextSegment {
   /** Index into the laid-out runs. */
   run: number;
+  /** The characters as drawn (all-caps runs uppercased). */
   text: string;
   x: number;
   width: number;
@@ -31,6 +32,11 @@ const LINE_BREAK = /(\r\n|\r|\n|\u0003)/;
 
 export function lineHeight(run: TextRun): number {
   return run.leadingPt ?? run.fontSize * 1.2;
+}
+
+/** Maps a segment's glyphs, drawn at the origin, onto its pen position: raised by the run's baseline shift and scaled by its character scaling. */
+export function glyphTransform(line: TextLine, segment: TextSegment, run: TextRun): AffineTransform {
+  return { m00: run.horizontalScale ?? 1, m01: 0, m10: 0, m11: run.verticalScale ?? 1, m02: segment.x, m12: line.baseline - (run.baselineShift ?? 0) };
 }
 
 /** Where a node's text lays out: its PSD type frame, or for graphs without one, `bounds` taken as a box in scene space. */
@@ -76,7 +82,7 @@ export function layoutText(node: TextLayerNode, runs: readonly TextRun[], measur
   let baseline = 0;
   breakLines(runs, measure, wrapWidth).forEach((pieces, i) => {
     const lineRuns = pieces.runs.map((r) => runs[r]!);
-    if (i === 0) baseline = box ? box.top + Math.max(...lineRuns.map((r) => measure.capHeight(r))) : 0;
+    if (i === 0) baseline = box ? box.top + Math.max(...lineRuns.map((r) => measure.capHeight(r) * (r.verticalScale ?? 1))) : 0;
     else baseline += Math.max(...lineRuns.map(lineHeight)) + (pieces.paragraphStart ? spacing : 0);
     const segments = segmentsOf(pieces.pieces, runs, measure);
     const width = segments.reduce((sum, s) => sum + s.width, 0);
@@ -104,7 +110,7 @@ function breakLines(runs: readonly TextRun[], measure: TextMeasure, wrapWidth: n
   const lines: PiecesLine[] = [{ pieces: [], runs: [], paragraphStart: false }];
   const current = () => lines[lines.length - 1]!;
   runs.forEach((run, r) => {
-    run.text.split(LINE_BREAK).forEach((part, i) => {
+    (run.allCaps ? run.text.toUpperCase() : run.text).split(LINE_BREAK).forEach((part, i) => {
       if (i % 2 === 1) {
         lines.push({ pieces: [], runs: [r], paragraphStart: part !== "\u0003" });
         return;
@@ -140,7 +146,7 @@ function segmentsOf(pieces: readonly Piece[], runs: readonly TextRun[], measure:
   }
   let x = 0;
   return merged.map(({ run, text }) => {
-    const width = measure.width(text, runs[run]!);
+    const width = measure.width(text, runs[run]!) * (runs[run]!.horizontalScale ?? 1);
     const segment = { run, text, x, width };
     x += width;
     return segment;

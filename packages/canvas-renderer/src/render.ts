@@ -1,6 +1,7 @@
 import {
   authoredWrapWidth,
   fieldWrapWidth,
+  glyphTransform,
   layoutText,
   lineHeight,
   lineWidth,
@@ -169,9 +170,13 @@ class Painter {
     for (const line of lines) {
       for (const segment of line.segments) {
         const run = runs[segment.run]!;
+        const g = glyphTransform(line, segment, run);
+        ctx.save();
+        ctx.transform(g.m00, g.m10, g.m01, g.m11, g.m02, g.m12);
         setRunFont(ctx, run);
         ctx.fillStyle = rgbaToCss(run.color);
-        ctx.fillText(segment.text, segment.x, line.baseline);
+        ctx.fillText(segment.text, 0, 0);
+        ctx.restore();
       }
     }
     ctx.restore();
@@ -227,10 +232,11 @@ export function textRunBoxes(ctx: Ctx2D, node: TextLayerNode): TextRunBox[] {
   ctx.save();
   for (const line of lines) {
     for (const s of line.segments) {
-      setRunFont(ctx, runs[s.run]!);
+      const run = runs[s.run]!;
+      setRunFont(ctx, run);
       const m = ctx.measureText(s.text);
-      const rect = { left: s.x - m.actualBoundingBoxLeft, top: line.baseline - m.actualBoundingBoxAscent, right: s.x + m.actualBoundingBoxRight, bottom: line.baseline + m.actualBoundingBoxDescent };
-      if (rect.right > rect.left && rect.bottom > rect.top) boxes.push({ run: s.run, rect: transformRect(transform, rect) });
+      const glyphs = { left: -m.actualBoundingBoxLeft, top: -m.actualBoundingBoxAscent, right: m.actualBoundingBoxRight, bottom: m.actualBoundingBoxDescent };
+      if (glyphs.right > glyphs.left && glyphs.bottom > glyphs.top) boxes.push({ run: s.run, rect: transformRect(transform, transformRect(glyphTransform(line, s, run), glyphs)) });
     }
   }
   ctx.restore();

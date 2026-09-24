@@ -98,6 +98,12 @@ export const TextRunSchema = z.object({
   leadingPt: z.number().optional(),
   bold: z.boolean().optional(),
   italic: z.boolean().optional(),
+  /** Photoshop's character scaling (1 = 100%). */
+  horizontalScale: z.number().positive().optional(),
+  verticalScale: z.number().positive().optional(),
+  /** Raises the glyphs off the baseline, in local units (negative lowers them). */
+  baselineShift: z.number().optional(),
+  allCaps: z.boolean().optional(),
 });
 export type TextRun = z.infer<typeof TextRunSchema>;
 

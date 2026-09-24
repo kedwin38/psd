@@ -2,6 +2,7 @@ import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
 import {
   authoredWrapWidth,
   fieldWrapWidth,
+  glyphTransform,
   layoutText,
   type SceneGraph,
   type SceneNode,
@@ -286,9 +287,13 @@ export class SceneCompositor {
     for (const line of lines) {
       for (const segment of line.segments) {
         const run = runs[segment.run]!;
+        const g = glyphTransform(line, segment, run);
+        ctx.save();
+        ctx.transform(g.m00, g.m10, g.m01, g.m11, g.m02, g.m12);
         ctx.font = fontString(run);
         ctx.fillStyle = rgbaToCss(run.color);
-        ctx.fillText(segment.text, segment.x, line.baseline);
+        ctx.fillText(segment.text, 0, 0);
+        ctx.restore();
       }
     }
     ctx.restore();

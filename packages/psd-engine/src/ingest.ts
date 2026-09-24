@@ -85,14 +85,14 @@ function hasPixels(layer: Layer): boolean {
 /**
  * Photoshop lays text out in local space and places it with the type tool's transform [xx, xy, yx, yy, tx, ty]:
  * point text's first baseline starts at (tx, ty) on its alignment edge; paragraph text wraps in boxBounds. The
- * layer record's bounds are only the rendered glyphs' extent. Generators that write text without pixels and
- * leave the transform at identity carry the position in the (empty) record bounds alone; those get no frame.
+ * layer record's bounds are only the rendered glyphs' extent. Generators that leave the transform at identity
+ * carry the position in the record bounds alone; those get no frame.
  */
 function textFrameOf(layer: Layer): TextFrame | undefined {
   const text = layer.text!;
   const [xx = 1, xy = 0, yx = 0, yy = 1, tx = 0, ty = 0] = text.transform ?? [];
   const unset = xx === 1 && xy === 0 && yx === 0 && yy === 1 && tx === 0 && ty === 0;
-  if (unset && !hasPixels(layer) && (layer.left || layer.top)) return undefined;
+  if (unset && (layer.left || layer.top)) return undefined;
   const box = text.shapeType === "box" && text.boxBounds?.length === 4 ? text.boxBounds : null;
   return {
     transform: { m00: xx, m01: yx, m10: xy, m11: yy, m02: tx, m12: ty },
@@ -134,6 +134,8 @@ function textLayoutLimits(layer: Layer): string[] {
     limits.push("Paragraphs differ in alignment or spacing; all of them lay out like the first.");
   }
   if (paragraphs.some((p) => p?.firstLineIndent || p?.startIndent || p?.endIndent)) limits.push("Paragraph indents are not applied.");
+  const styles = [text.style, ...(text.styleRuns ?? []).map((r) => r.style)];
+  if (styles.some((s) => s?.fontCaps === 1 || s?.fontBaseline)) limits.push("Small caps, superscript and subscript render as regular text.");
   return limits;
 }
 
@@ -159,7 +161,7 @@ function buildTextRuns(layer: Layer, warnings: IngestWarning[], path: string): T
   const fullText = textData.text ?? "";
   const baseStyle = textData.style ?? {};
   const styleRuns = textData.styleRuns;
-  const autoLeading = textData.paragraphStyle?.autoLeading ?? 1.2;
+  const autoLeading = paragraphSetting(textData, "autoLeading") ?? 1.2;
 
   const toRun = (text: string, style: typeof baseStyle): TextRun => {
     const fontSize = style.fontSize ?? baseStyle.fontSize ?? 12;
@@ -175,6 +177,11 @@ function buildTextRuns(layer: Layer, warnings: IngestWarning[], path: string): T
       leadingPt: auto ? fontSize * autoLeading : leading,
       bold: style.fauxBold ?? baseStyle.fauxBold,
       italic: style.fauxItalic ?? baseStyle.fauxItalic,
+      horizontalScale: style.horizontalScale ?? baseStyle.horizontalScale,
+      verticalScale: style.verticalScale ?? baseStyle.verticalScale,
+      baselineShift: style.baselineShift ?? baseStyle.baselineShift,
+      // Text engine FontCaps: 0 normal, 1 small caps, 2 all caps.
+      allCaps: (style.fontCaps ?? baseStyle.fontCaps) === 2 || undefined,
     };
   };
 
@@ -271,7 +278,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
       const runs = buildTextRuns(layer, warnings, path);
       const frame = textFrameOf(layer);
       if (!frame) {
-        warn({ path, message: "Text layer has no type transform (it would draw at the document origin in Photoshop); placed from its layer bounds instead." });
+        warn({ path, message: "Text layer's type transform is unset (the document origin) though the layer sits elsewhere; placed from its layer bounds instead." });
       }
       for (const message of textLayoutLimits(layer)) warn({ path, message });
       const bounds = textBoundsOf(layer, frame, runs[0]!.fontSize);
