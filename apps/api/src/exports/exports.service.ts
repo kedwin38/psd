@@ -5,8 +5,15 @@ import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { RENDER_QUEUE_TOKEN } from "../queue/queue.module";
 import type { RenderJobData } from "../queue/queue.constants";
-import { ExportStatus } from "../generated/prisma";
+import { ExportFormat, ExportStatus } from "../generated/prisma";
 import type { CreateExportDto } from "./dto/export.dto";
+
+const EXTENSION: Record<ExportFormat, string> = {
+  [ExportFormat.PNG]: "png",
+  [ExportFormat.JPEG]: "jpg",
+  [ExportFormat.PDF]: "pdf",
+  [ExportFormat.TIFF]: "tiff",
+};
 
 @Injectable()
 export class ExportsService {
@@ -47,12 +54,14 @@ export class ExportsService {
   }
 
   async get(id: string, userId: string) {
-    const job = await this.prisma.exportJob.findUnique({ where: { id }, include: { outputAsset: true } });
+    const job = await this.prisma.exportJob.findUnique({ where: { id }, include: { outputAsset: true, project: { select: { name: true } } } });
     if (!job) throw new NotFoundException("Export job not found.");
     if (job.requestedById !== userId) throw new ForbiddenException("You do not own this export job.");
 
     if (job.status === ExportStatus.COMPLETE && job.outputAsset) {
-      const downloadUrl = await this.storage.getSignedDownloadUrl(job.outputAsset.storageKey, 600);
+      const base = (job.project.name || "export").replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "export";
+      const filename = `${base}.${EXTENSION[job.outputFormat]}`;
+      const downloadUrl = await this.storage.getSignedDownloadUrl(job.outputAsset.storageKey, 600, filename);
       return { ...job, downloadUrl };
     }
     return job;

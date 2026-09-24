@@ -50,8 +50,8 @@ export class StorageService {
     return this.driver.get(storageKey);
   }
 
-  async getSignedDownloadUrl(storageKey: string, expiresInSeconds = 300): Promise<string> {
-    return this.driver.getSignedDownloadUrl(storageKey, expiresInSeconds);
+  async getSignedDownloadUrl(storageKey: string, expiresInSeconds = 300, filename?: string): Promise<string> {
+    return this.driver.getSignedDownloadUrl(storageKey, expiresInSeconds, filename);
   }
 
   async deleteByKey(storageKey: string): Promise<void> {

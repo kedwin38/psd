@@ -52,7 +52,7 @@ export class LocalDiskStorageDriver implements StorageDriver {
     await rm(this.pathFor(key), { force: true });
   }
 
-  async getSignedDownloadUrl(key: string, expiresInSeconds: number): Promise<string> {
+  async getSignedDownloadUrl(key: string, expiresInSeconds: number, filename?: string): Promise<string> {
     assertSafeKey(key);
     await stat(this.pathFor(key)).catch(() => {
       throw new NotFoundException(`Asset ${key} not found.`);
@@ -63,6 +63,8 @@ export class LocalDiskStorageDriver implements StorageDriver {
     url.searchParams.set("key", key);
     url.searchParams.set("exp", String(exp));
     url.searchParams.set("sig", sig);
+    // Not part of the signature: it only names the saved file, it never changes which bytes are served.
+    if (filename) url.searchParams.set("filename", filename);
     return url.toString();
   }
 

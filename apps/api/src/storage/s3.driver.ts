@@ -62,8 +62,12 @@ export class S3StorageDriver implements StorageDriver {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
   }
 
-  async getSignedDownloadUrl(key: string, expiresInSeconds: number): Promise<string> {
-    const command = new GetObjectCommand({ Bucket: this.config.bucket, Key: key });
+  async getSignedDownloadUrl(key: string, expiresInSeconds: number, filename?: string): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: this.config.bucket,
+      Key: key,
+      ResponseContentDisposition: filename ? `attachment; filename="${filename.replace(/"/g, "")}"` : undefined,
+    });
     return getSignedUrl(this.client, command, { expiresIn: expiresInSeconds });
   }
 }
