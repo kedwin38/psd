@@ -47,11 +47,24 @@ export async function setPassword(password: string): Promise<void> {
   await api.post("/auth/password", { password });
 }
 
+export type StepUpMethod = "passkey" | "totp";
+
+/** The second factors the signed-in account can re-authenticate with. */
+export async function stepUpMethods(): Promise<StepUpMethod[]> {
+  return (await api.get<{ methods: StepUpMethod[] }>("/auth/step-up/methods")).methods;
+}
+
 /** Performs a fresh WebAuthn re-assertion and returns a short-lived step-up token (spec §12). */
-export async function stepUp(): Promise<string> {
+export async function stepUpWithPasskey(): Promise<string> {
   const optionsJSON = await api.post<PublicKeyCredentialRequestOptionsJSON>("/auth/step-up/options");
   const response = await startAuthentication({ optionsJSON });
   const result = await api.post<{ stepUpToken: string }>("/auth/step-up/verify", { response });
+  return result.stepUpToken;
+}
+
+/** Trades an authenticator (or recovery) code for the same short-lived step-up token. */
+export async function stepUpWithTotp(code: string): Promise<string> {
+  const result = await api.post<{ stepUpToken: string }>("/auth/step-up/totp", { code });
   return result.stepUpToken;
 }
 

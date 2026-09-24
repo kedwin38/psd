@@ -64,7 +64,14 @@ function xhrRequest(
     xhr.withCredentials = true;
     for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
     xhr.upload.onprogress = (e) => e.lengthComputable && onUploadProgress(e.loaded / e.total);
-    xhr.onload = () => resolve(new Response(xhr.status === 204 ? null : xhr.responseText, { status: xhr.status, statusText: xhr.statusText }));
+    xhr.onload = () => {
+      const headers = new Headers();
+      for (const line of xhr.getAllResponseHeaders().trim().split(/[\r\n]+/)) {
+        const colon = line.indexOf(":");
+        if (colon > 0) headers.append(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+      }
+      resolve(new Response(xhr.status === 204 ? null : xhr.responseText, { status: xhr.status, statusText: xhr.statusText, headers }));
+    };
     xhr.onerror = () => reject(new TypeError("Network request failed"));
     xhr.send(body);
   });
@@ -120,7 +127,9 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   const sentWith = accessToken;
   let res = await rawRequest(path, options);
 
-  if (res.status === 401 && !options.skipAuthRetry && path !== "/auth/refresh") {
+  // Only a bearer challenge means the access token itself was refused; any other 401 is the action's own answer
+  // (a wrong code, an unknown credential) and neither a refresh nor a sign-out would change it.
+  if (res.status === 401 && res.headers.has("WWW-Authenticate") && !options.skipAuthRetry && path !== "/auth/refresh") {
     // Someone else already renewed the token while this request was out: just retry with it.
     const refreshed = accessToken !== sentWith ? accessToken : await tryRefresh();
     if (refreshed) {

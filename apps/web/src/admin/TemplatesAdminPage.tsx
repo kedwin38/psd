@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Rocket } from "lucide-react";
 import { api, ApiError } from "../lib/api";
-import { stepUp } from "../lib/auth-api";
 import type { Category, Template, TemplateVersion } from "../lib/types";
 import { Spinner } from "../components/workspace";
+import { useStepUp } from "../components/StepUpDialog";
 
 const INGEST_POLL_MS = 2000;
 
@@ -38,6 +38,7 @@ export function TemplatesAdminPage() {
   const psdInput = useRef<HTMLInputElement>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const navigate = useNavigate();
+  const { stepUp, dialog: stepUpDialog } = useStepUp();
 
   const load = async () => {
     const [t, c] = await Promise.all([api.get<AdminTemplate[]>("/templates/admin/all"), api.get<Category[]>("/categories")]);
@@ -109,6 +110,7 @@ export function TemplatesAdminPage() {
     setPublishing(versionId);
     try {
       const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
       await api.post(`/templates/${templateId}/versions/${versionId}/publish`, {}, stepUpToken);
       await load();
     } catch (err) {
@@ -120,6 +122,7 @@ export function TemplatesAdminPage() {
 
   return (
     <div className="grid-2">
+      {stepUpDialog}
       <div>
         <h1>Template library</h1>
         <p className="subtitle">Upload a PSD and publish it: every unlocked layer becomes an editable field. Lock layers in the workspace to keep them fixed.</p>

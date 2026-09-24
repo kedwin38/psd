@@ -62,7 +62,7 @@ test("an expired access token doesn't log the admin out when a poll and Publish 
   await expect(templateCard(page, "Ready Badge").locator(".badge", { hasText: "current" })).toBeVisible({ timeout: 30_000 });
   expect(page.url()).toMatch(/\/admin\/templates$/);
   const { refreshes, rejected } = network.stats();
-  expect(rejected).toEqual(expect.arrayContaining(["POST /api/v1/auth/step-up/options", "GET /api/v1/templates/admin/all"]));
+  expect(rejected).toEqual(expect.arrayContaining(["GET /api/v1/auth/step-up/methods", "GET /api/v1/templates/admin/all"]));
   expect(refreshes).toBe(1);
 
   // The refresh cookie is still good: a full reload restores the session instead of landing on the login page.

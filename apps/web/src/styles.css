@@ -340,6 +340,7 @@ button.icon-btn.sm { width: 26px; height: 26px; }
 /* Row / stack helpers */
 .row { display: flex; gap: 10px; align-items: center; }
 .row.between { justify-content: space-between; }
+.row.end { justify-content: flex-end; }
 .stack { display: flex; flex-direction: column; gap: 10px; }
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: var(--s-8); align-items: start; }
 
@@ -376,6 +377,18 @@ button.icon-btn.sm { width: 26px; height: 26px; }
   box-shadow: var(--shadow-sm);
 }
 .card > h2:first-child, .card > h3:first-child { margin-top: 0; }
+
+.step-up-dialog {
+  width: min(380px, calc(100vw - 32px));
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: var(--s-6);
+  box-shadow: var(--shadow-lg);
+}
+.step-up-dialog::backdrop { background: rgba(16, 20, 28, 0.4); }
+.step-up-dialog h2 { margin: 0; }
 
 table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-md); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
 th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--gray-150); }

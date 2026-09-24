@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { lockingNode, type SceneGraph, type SceneNode } from "@psd-studio/scene-graph";
 import { AlertCircle, AlertTriangle, Box, Check, ChevronRight, Eye, FileWarning, Image, MousePointerClick, PanelLeft, PanelRight, Redo2, RefreshCw, Rocket, Type, Undo2, X } from "lucide-react";
 import { api, ApiError } from "../lib/api";
-import { stepUp } from "../lib/auth-api";
 import { isTypingTarget } from "../lib/keyboard";
 import type { FieldType, Template, TemplateField, TemplateVersion } from "../lib/types";
 import { SceneCanvas, handleZoomKey, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
@@ -13,6 +12,7 @@ import { EmptyState, MOD, PanelResizer, Popover, ShortcutsButton, Spinner, Works
 import { LayerTree, TYPE_LABEL } from "./LayerTree";
 import { FIELD_TYPE_LABEL, FieldMappingForm } from "./FieldMappingForm";
 import { useCommandStack, type Command } from "./useCommandStack";
+import { useStepUp } from "../components/StepUpDialog";
 
 const isPickable = (node: SceneNode) => !node.locked;
 
@@ -61,6 +61,7 @@ export function TemplateWorkspacePage() {
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const { stepUp, dialog: stepUpDialog } = useStepUp();
   const [saved, setSaved] = useState(false);
   const canvasRef = useRef<SceneCanvasHandle>(null);
   const commands = useCommandStack((err) => {
@@ -271,6 +272,7 @@ export function TemplateWorkspacePage() {
     setPublishing(true);
     try {
       const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
       await api.post(`${base}/publish`, {}, stepUpToken);
       navigate("/admin/templates");
     } catch (err) {
@@ -360,6 +362,7 @@ export function TemplateWorkspacePage() {
 
   return (
     <div className="ws workspace-page">
+      {stepUpDialog}
       <WorkspaceTopBar
         back={BACK}
         title={template.name}
