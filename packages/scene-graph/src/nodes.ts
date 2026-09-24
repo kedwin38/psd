@@ -79,6 +79,8 @@ const BaseNodeSchema = z.object({
   clipping: z.boolean(),
   /** Optional grayscale layer-mask raster, stored as an Asset id. */
   maskAssetId: z.string().nullable().optional(),
+  /** PSD layer lock (or admin-toggled); locked layers are skipped by canvas click-selection. */
+  locked: z.boolean().optional(),
 });
 
 export const PixelLayerNodeSchema = BaseNodeSchema.extend({
@@ -208,6 +210,17 @@ export function* walkSceneGraph(graph: SceneGraph): Generator<SceneNode> {
     }
   }
   yield* walk(graph.root);
+}
+
+/** Every asset id the graph's nodes reference (layer rasters, masks, adjustment previews). */
+export function referencedAssetIds(graph: SceneGraph): Set<string> {
+  const ids = new Set<string>();
+  for (const node of walkSceneGraph(graph)) {
+    if (node.maskAssetId) ids.add(node.maskAssetId);
+    if (node.type === "pixel" || node.type === "shape" || node.type === "smartObject") ids.add(node.imageAssetId);
+    if (node.type === "adjustment" && node.previewAssetId) ids.add(node.previewAssetId);
+  }
+  return ids;
 }
 
 export function findNodeById(graph: SceneGraph, id: string): SceneNode | undefined {

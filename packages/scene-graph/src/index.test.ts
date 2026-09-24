@@ -4,6 +4,7 @@ import {
   idFromPath,
   walkSceneGraph,
   findNodeById,
+  referencedAssetIds,
   type SceneGraph,
 } from "./index.js";
 import { FieldOverrideSchema } from "./fields.js";
@@ -78,6 +79,13 @@ describe("SceneGraphSchema", () => {
     expect(parsed).toEqual(graph);
   });
 
+  it("accepts the optional locked flag and graphs stored before it existed", () => {
+    const graph = sampleGraph();
+    graph.root[0]!.locked = true;
+    expect(SceneGraphSchema.parse(graph).root[0]!.locked).toBe(true);
+    expect(SceneGraphSchema.parse(sampleGraph()).root[0]!.locked).toBeUndefined();
+  });
+
   it("rejects an unknown node type", () => {
     const graph: any = sampleGraph();
     graph.root[0].children.push({ type: "bogus" });
@@ -103,6 +111,12 @@ describe("walkSceneGraph / findNodeById", () => {
     const graph = sampleGraph();
     const node = findNodeById(graph, idFromPath("Card/Photo"));
     expect(node?.type).toBe("smartObject");
+  });
+});
+
+describe("referencedAssetIds", () => {
+  it("collects raster asset ids from nested nodes", () => {
+    expect([...referencedAssetIds(sampleGraph())]).toEqual(["asset_photo_preview"]);
   });
 });
 

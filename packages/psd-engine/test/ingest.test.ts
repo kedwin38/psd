@@ -248,6 +248,19 @@ describe("buildSceneGraph", () => {
     expect(sceneGraph.root[0]!.visible).toBe(false);
   });
 
+  it("maps any Photoshop lock toggle to locked", async () => {
+    const psd: Psd = {
+      width: 20,
+      height: 20,
+      children: [
+        { name: "Background", opacity: 1, blendMode: "normal", protected: { transparency: true }, canvas: fakeCanvas(20, 20, "#fff") } as Layer,
+        { name: "Free", opacity: 1, blendMode: "normal", canvas: fakeCanvas(10, 10, "#000") } as Layer,
+      ],
+    };
+    const { sceneGraph } = await buildSceneGraph(psd, new RecordingSink());
+    expect(sceneGraph.root.map((n) => n.locked)).toEqual([true, false]);
+  });
+
   it("finds nested nodes via findNodeById after ingestion", async () => {
     const psd: Psd = {
       width: 50,

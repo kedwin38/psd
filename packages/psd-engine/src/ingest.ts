@@ -131,6 +131,12 @@ function buildTextRuns(layer: Layer, warnings: IngestWarning[], path: string): T
   return runs;
 }
 
+/** Any of Photoshop's lock toggles (the panel shows a lock icon for each of these). */
+function isLocked(layer: Layer): boolean {
+  const p = layer.protected;
+  return !!(p?.transparency || p?.composite || p?.position);
+}
+
 export interface IngestOptions {
   /** Called for every layer that could not be fully translated. */
   onWarning?: (warning: IngestWarning) => void;
@@ -162,6 +168,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
       warn({ path, message: `Blend mode "${layer.blendMode}" approximated as "${blendMode}" (no exact Canvas2D equivalent).` });
     }
     const clipping = !!layer.clipping;
+    const locked = isLocked(layer);
     const maskAssetId: string | null = null; // v1: masks are baked into the layer raster by ag-psd's decode; standalone editable masks are a Phase 2 item.
 
     // --- Group ---
@@ -183,6 +190,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         opacity,
         blendMode,
         clipping,
+        locked,
         maskAssetId,
         bounds,
         isPassThrough,
@@ -203,6 +211,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         opacity,
         blendMode,
         clipping,
+        locked,
         maskAssetId,
         bounds,
         runs,
@@ -233,6 +242,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         opacity,
         blendMode,
         clipping,
+        locked,
         maskAssetId,
         bounds,
         imageAssetId,
@@ -256,6 +266,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         opacity,
         blendMode,
         clipping,
+        locked,
         maskAssetId,
         bounds,
         adjustmentKind: layer.adjustment.type,
@@ -279,6 +290,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
           opacity,
           blendMode,
           clipping,
+          locked,
           maskAssetId,
           bounds,
           imageAssetId,
@@ -293,6 +305,7 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         opacity,
         blendMode,
         clipping,
+        locked,
         maskAssetId,
         bounds,
         imageAssetId,
