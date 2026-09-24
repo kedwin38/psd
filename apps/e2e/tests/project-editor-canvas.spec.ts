@@ -141,8 +141,9 @@ test("end-user editor: live canvas with in-place editing that matches the export
     const photo = await pngFile(page, 400, 200, "#ff0000", "#0000ff");
     await dragOver(page, 70, 280, photo);
     await expect(notice(page)).toContainText("“Full Name” is a text field");
-    await dragOver(page, 60, 320, photo, true);
-    await expect(notice(page)).toContainText("“Title” is part of the template's design");
+    // Title is fixed design, so a drop targets whatever lies beneath it, exactly as a click there would.
+    await dragOver(page, 60, 320, photo);
+    await expect(notice(page)).toHaveText("Drop to replace the image in “Background”");
     await dragOver(page, 120, 120, await pngFile(page, 100, 100, "#00ff00"), true);
     await expect(block(page, "Photo").locator(".field-error")).toContainText("at least 200×200px");
     await expect.poll(() => pixelAt(page, 120, 120)).toEqual(GRAY);

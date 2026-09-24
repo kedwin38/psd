@@ -168,15 +168,15 @@ export function ProjectEditorPage() {
 
   const imageDrop: ImageDrop = {
     rejectReason: (node, mimeType) => {
-      if (!node) return "Drop the image onto a photo in your design.";
-      const field = fieldByNode.get(node.id);
-      if (!field) return `“${node.name}” is part of the template's design and can't be changed.`;
+      const field = node && fieldByNode.get(node.id);
+      if (!field) return "Drop the image onto a photo in your design.";
       if (!isImageField(field)) return `“${field.label}” is a ${FIELD_KIND[field.fieldType]} field; drop images onto a photo.`;
       const { allowedMimeTypes } = imageRules(field);
       return mimeType && !allowedMimeTypes.includes(mimeType) ? `“${field.label}” accepts ${mimeList(allowedMimeTypes)} images.` : null;
     },
     onDrop: (node, file) => void replaceImage(fieldByNode.get(node.id)!, file),
-    passThrough: (node) => fieldByNode.get(node.id)?.fieldType === "VISIBILITY",
+    // Same targets as clicks: fixed design layers (e.g. a frame or gradient over a photo) don't block a drop onto the photo beneath.
+    passThrough: (node) => !isPickable(node),
   };
 
   useEffect(() => {
