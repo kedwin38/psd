@@ -28,6 +28,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Dependents typecheck against these packages' emitted .d.ts files.
+      - name: Build shared packages
+        run: |
+          pnpm --filter @psd-studio/scene-graph run build
+          pnpm --filter @psd-studio/psd-engine run build
+          pnpm --filter @psd-studio/canvas-renderer run build
+          pnpm --filter @psd-studio/api run prisma:generate
+
       - name: Typecheck every package
         run: pnpm run typecheck
 
@@ -94,6 +102,7 @@ jobs:
         run: |
           pnpm --filter @psd-studio/scene-graph run build
           pnpm --filter @psd-studio/psd-engine run build
+          pnpm --filter @psd-studio/canvas-renderer run build
 
       - name: Run database migrations
         run: pnpm --filter @psd-studio/api run prisma:deploy

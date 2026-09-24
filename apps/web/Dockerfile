@@ -8,15 +8,20 @@ WORKDIR /repo
 FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY packages/scene-graph/package.json packages/scene-graph/package.json
+# canvas-renderer's parity tests devDepend on psd-engine, so its manifest is needed for the workspace install.
+COPY packages/psd-engine/package.json packages/psd-engine/package.json
+COPY packages/canvas-renderer/package.json packages/canvas-renderer/package.json
 COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 COPY packages/scene-graph packages/scene-graph
+COPY packages/canvas-renderer packages/canvas-renderer
 COPY apps/web apps/web
 ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
 RUN pnpm --filter @psd-studio/scene-graph run build \
+  && pnpm --filter @psd-studio/canvas-renderer run build \
   && pnpm --filter @psd-studio/web exec vite build
 
 FROM nginx:1.27-alpine AS runtime
