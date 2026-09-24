@@ -73,7 +73,7 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; }
 
 label { display: block; font-size: 13px; color: var(--text-dim); margin: 12px 0 4px; }
-input[type="text"], input[type="email"], input[type="password"], input[type="number"], select, textarea {
+input:not([type]), input[type="text"], input[type="email"], input[type="password"], input[type="number"], select, textarea {
   width: 100%;
   padding: 9px 10px;
   border-radius: 8px;
@@ -206,7 +206,10 @@ tr:hover td { background: var(--surface-2); }
 .font-badge { font-size: 10px; color: var(--text-dim); cursor: help; }
 .font-badge-caption { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
 
-.mapping-layout { display: grid; grid-template-columns: 300px 1fr 320px; gap: 20px; height: calc(100vh - 56px); }
+/* Fills what .main's padding leaves below the page header, like .editor-layout, so the canvas toolbar stays on screen. */
+.workspace-page { display: flex; flex-direction: column; height: calc(100vh - 56px); }
+/* Side panes shrink with the viewport so the canvas keeps a usable width on laptop-size screens. */
+.mapping-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(200px, 22vw, 300px) minmax(0, 1fr) clamp(240px, 24vw, 320px); gap: 20px; }
 .mapping-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; overflow-y: auto; }
 
 .workspace-canvas-pane { position: relative; min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }

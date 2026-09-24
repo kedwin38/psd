@@ -244,7 +244,7 @@ export function TemplateWorkspacePage() {
   const saving = publishing || commands.busy;
 
   return (
-    <div>
+    <div className="workspace-page">
       <div className="row between" style={{ marginBottom: 16 }}>
         <div>
           <h1>
