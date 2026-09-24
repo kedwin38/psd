@@ -15,8 +15,10 @@ apps/
   web/     React + Vite frontend — auth UI, admin console, editor
   e2e/     Playwright end-to-end suite (drives the real app + a virtual passkey)
 packages/
-  scene-graph/  Shared, zod-validated PSD scene-graph types (layers, fields, overrides)
-  psd-engine/   Real PSD ingestion (ag-psd) + a from-scratch compositor (@napi-rs/canvas)
+  scene-graph/      Shared, zod-validated PSD scene-graph types (layers, fields, overrides)
+  psd-engine/       Real PSD ingestion (ag-psd) + the server compositor (@napi-rs/canvas)
+  canvas-renderer/  The browser compositor behind both editing canvases, plus hit testing,
+                    text layout/measurement and crop geometry
 ```
 
 The API and the ingestion/render workers are the same codebase (`apps/api`)
@@ -25,11 +27,17 @@ so they can scale independently. Both talk to Postgres, Redis (BullMQ), and
 object storage (local disk in dev, S3/Cloudflare R2 in prod) through the same
 services.
 
-The defining architectural bet: the admin's field-mapping preview, the
-end-user editor's live preview, and the final export all render the **same**
-scene graph through the **same** compositor (`SceneCompositor` in
-`packages/psd-engine`), just at different resolutions. That's what
-guarantees the exported file matches what everyone saw while editing.
+The defining architectural bet: the admin workspace, the end-user editor
+and the final export all render the **same** scene graph, with field values
+merged in by the **same** `toFieldOverrides` (`packages/scene-graph`). The
+two canvases composite it live in the browser (`packages/canvas-renderer`);
+exports are rendered by the worker (`SceneCompositor` in
+`packages/psd-engine`). The two compositors deliberately mirror each other
+— same layer order, clip-group approximation, text wrap and crop maths —
+and the e2e suite checks the editor canvas's pixels against a real export.
+Where they knowingly differ, the code marks it (`Diverges from server` in
+`canvas-renderer/src`) and the editor tells the user on the affected field;
+see [Known scope limits](#known-scope-limits-stated-up-front-not-discovered-later).
 
 ## Running locally
 
@@ -82,14 +90,29 @@ the new role on the next token.)
 
 ## Testing
 
+Packages typecheck against each other's emitted `.d.ts`, so build the
+shared packages (and generate the Prisma client) once after installing:
+
 ```sh
-pnpm run test:unit   # scene-graph + psd-engine — pure logic, no services needed
-pnpm run test:api    # NestJS integration tests — needs Postgres + Redis
-pnpm run test:e2e    # Playwright, drives the real app end-to-end — needs
-                      # Postgres, Redis, the API, the worker, and the web
-                      # app all running (see apps/e2e/README notes below)
-pnpm run typecheck   # every package
+pnpm --filter @psd-studio/scene-graph run build
+pnpm --filter @psd-studio/psd-engine run build
+pnpm --filter @psd-studio/canvas-renderer run build
+pnpm --filter @psd-studio/api run prisma:generate
 ```
+
+```sh
+pnpm run typecheck   # every package
+pnpm run test:unit   # scene-graph + psd-engine + canvas-renderer — pure logic, no services needed
+pnpm run test:api    # NestJS integration tests — builds the API, needs Postgres + Redis
+pnpm run test:e2e    # Playwright, drives the real app end-to-end — needs
+                      # Postgres, Redis, the API, the worker, and a web
+                      # build all running (see the e2e job in .github/workflows/ci.yml)
+```
+
+The e2e suite reads `E2E_WEB_URL` (default `http://localhost:5173`),
+`DATABASE_URL` (it truncates that database and grants the admin role
+directly) and optionally `E2E_CHROMIUM_PATH`. Each spec starts from an
+empty database.
 
 `test:e2e` uses Chrome DevTools Protocol's WebAuthn domain to attach a
 *virtual* authenticator, so the passkey flows are exercised for real —
@@ -132,7 +155,9 @@ See `.env.example` for the full list of required variables.
 
 Every item below has been exercised end-to-end against a real running
 stack, not just written and assumed correct — see `apps/e2e` and
-`apps/api/test`:
+`apps/api/test`. (Within the canvas controls, touch/trackpad pinch and
+middle-drag pan are implemented but not covered by the e2e specs, which
+drive mouse, wheel, keyboard and Space+drag.)
 
 - Passkey (WebAuthn) registration and login as the primary auth path;
   password+TOTP as an always-MFA fallback (no password-only login for any
@@ -143,27 +168,43 @@ stack, not just written and assumed correct — see `apps/e2e` and
   smart objects, adjustment layers, blend-mode mapping with documented
   fidelity notes — running in a memory-capped, time-boxed child process so
   a hostile or malformed file can't take down the worker.
-- A from-scratch compositor that renders the ingested scene graph (with
-  field overrides merged in) at any resolution, including clip groups and
-  isolated (non-pass-through) group blending.
-- Admin field-mapping workspace: click a layer in the real parsed layer
-  tree, tag it as a text/image/smart-object/visibility field with
-  constraints, publish (step-up gated).
-- End-user editor: a live layered canvas composited in the browser
-  (`packages/canvas-renderer`, the same one the admin workspace uses) with
-  the project's field values merged in through the same
-  `toFieldOverrides` the server's export uses. Only fields an admin mapped
-  are interactive: type text in place on the canvas (synced with the
-  sidebar, with length/required/overflow feedback), drop a photo onto its
-  layer and drag/scroll/pinch to reposition and zoom it (saved as the
-  field's crop window), toggle show/hide layers from on-canvas chips, and
-  zoom/pan like the admin canvas. Where the browser canvas knowingly
-  differs from the export (a missing font, text styling the server
-  doesn't apply yet, top-level clipping masks) the field says so. Photo
-  uploads are validated server-side (type, bytes, pixels, dimensions after
-  EXIF orientation) and bound to their project. An async export pipeline
-  produces PNG/JPEG/real-PDF (via Skia)/TIFF with signed, expiring
-  download URLs.
+- Two compositors over the same scene graph: the worker's
+  (`SceneCompositor`, for exports at any resolution) and the browser's
+  (`canvas-renderer`, for both editing canvases, rendering only the
+  zoomed/panned viewport). Both handle clip groups and isolated
+  (non-pass-through) group blending, and paint field overrides the same
+  way. Layer rasters are served per layer and decoded downsampled in the
+  browser, so large print PSDs stay responsive.
+- A shared canvas (`apps/web/src/canvas/SceneCanvas.tsx`) with the same
+  controls in both apps: wheel/trackpad-pinch/touch-pinch zoom around the
+  pointer, Space+drag or middle-drag pan, a Fit / 100% / ± toolbar, `+`/`-`,
+  Ctrl/⌘+0 (fit) and Ctrl/⌘+1 (100%), alpha-accurate click selection,
+  hover outlines, and drag-and-drop of PNG/JPEG/WebP files with a live
+  "will land here / can't land here" highlight.
+- Admin field-mapping workspace: a Photoshop-style layers panel
+  (thumbnails, search, collapsible groups, view-only eye toggles, and locks
+  that are saved and make canvas clicks pass through) kept in sync with
+  the canvas; double-click text to inspect its individual runs (font,
+  size, colour, tracking); drop an image onto a pixel or smart-object layer
+  to replace its raster; tag layers as text/image/smart-object/visibility
+  fields with constraints; undo/redo (buttons or Ctrl/⌘+Z, Ctrl/⌘+Shift+Z,
+  Ctrl/⌘+Y) across field, eye, lock and raster changes; publish (step-up
+  gated).
+- End-user editor: the project's field values composited live on the same
+  canvas. Only fields an admin mapped are interactive — everything else
+  is fixed design that clicks and drops pass straight through: type text
+  in place on the canvas (synced with the sidebar, with
+  length/required/overflow feedback as you type), drop a photo onto its
+  layer or pick a file, then drag/scroll/pinch/arrow-key to reposition and
+  zoom it (saved as the field's crop window, with a warning when the
+  export would visibly upscale it), and toggle show/hide layers from
+  on-canvas chips. Edits autosave per field (typing debounced) and Export
+  saves anything pending first. Where the canvas knowingly differs from
+  the export, the field says so. Photo uploads are validated server-side
+  (type, bytes, pixels, dimensions after EXIF orientation) and bound to
+  their project.
+- An async export pipeline producing PNG/JPEG/real-PDF (via Skia)/TIFF
+  with signed, expiring download URLs.
 
 ## Known scope limits (stated up front, not discovered later)
 
@@ -173,6 +214,42 @@ In the spirit of the spec's own "honest scope limits" principle:
   account immediately rather than sending a verification email — there's
   no SMTP/email provider configured in this environment. The schema and
   flow support adding it later without a redesign.
+- **Fonts are the biggest fidelity gap between canvas and export.** PSD
+  fonts are never embedded or registered anywhere. The browser tries the
+  PSD's PostScript name, then a derived family name with a weight/style
+  inferred from it ("OpenSans-SemiBold" → "Open Sans" 600); the export only
+  asks for the exact PostScript name (plus the PSD's bold/italic flags)
+  and otherwise falls back to a system font — in the Docker image that's
+  Liberation or DejaVu. So unless the server has the PSD's exact font
+  installed, exported text is set in a stand-in face and can wrap
+  differently from the canvas. The editor warns when *the browser* lacks
+  a field's font, but can't tell whether the server has it.
+- **Other known canvas-vs-export differences** (each flagged on the
+  affected field in the editor; see `canvas-renderer/src/divergence.ts`):
+  text tracking (letter spacing), a text layer's own opacity and blend
+  mode, and "clip to layer below" on top-level layers are shown on the
+  canvas but not applied in exports yet.
+- **Text rendering is simplified in both compositors.** Replacement text
+  takes the style of the layer's first run, greedy-wraps to the layer's
+  width and treats justified alignment as left; authored text keeps its
+  per-run styles but is drawn left-aligned from the layer's left edge.
+  Warped text, paragraph spacing and OpenType features aren't modelled.
+- **Shared approximations** (both compositors, matching each other rather
+  than Photoshop): adjustment layers are structural (toggle-only), their
+  pixel effect isn't applied; a pass-through group's own opacity isn't
+  applied; clipped layers are masked to the base's alpha and composited
+  normally; warp/Liquify and most non-Canvas2D blend modes are
+  approximated at ingestion (see `packages/psd-engine/src/blendMode.ts` and
+  the ingestion warnings surfaced in the admin workspace).
+- **Desktop-first layout.** The app shell has no phone layout (at ~390px
+  wide the editor's canvas has no room), and the admin workspace's three
+  panes get tight below ~1280px wide. Touch pinch/pan works on the canvas
+  itself, e.g. on tablets.
+- **The template gallery has no thumbnails** — cards show the category
+  name.
+- **The server-rendered preview endpoints**
+  (`GET /templates/:id/versions/:vid/preview`, `POST /projects/:id/preview`)
+  still exist but the web app no longer uses them.
 - **The photo cropper is reposition/zoom only.** Uploads start
   cover-fitted to their layer (never distorted) and can be dragged and
   scaled inside it; there's no rotation, and the admin's aspect-ratio
@@ -182,11 +259,11 @@ In the spirit of the spec's own "honest scope limits" principle:
   does). Text boxes keep the browser's own undo while typing.
 - **No lint tooling is configured** (`lint` scripts are stubs). Type
   checking and the test suites are the current correctness net.
-- **Advanced PSD fidelity gaps are real, not hidden**: warp/Liquify and
-  most non-Canvas2D blend modes are approximated, not pixel-exact (see
-  `packages/psd-engine/src/blendMode.ts` and the ingestion warnings
-  surfaced in the admin workspace); adjustment layers are structural
-  (toggle-only) in this version, not yet applying their pixel effect.
+- **The Docker images haven't been built end to end from this
+  environment** (its network blocks package installs inside builds). The
+  install and compile steps have been run on the host instead; the API's
+  `pnpm deploy --prod` step and both runtime stages (including the font
+  packages in `apps/api/Dockerfile`) are untested in an actual image.
 - **S3/R2 storage driver is implemented but untested against a real
   bucket** in this environment (no credentials available here) — the
   local-disk driver is what's actually been exercised end-to-end.
