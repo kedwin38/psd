@@ -27,7 +27,15 @@ interface LayerTreeProps {
   isVisible: (node: SceneNode) => boolean;
   onToggleVisible: (node: SceneNode) => void;
   onToggleLocked: (node: SceneNode) => void;
+  /** Until publish, locks decide what end users can edit: every unlocked layer is a field. */
+  followsLocks: boolean;
   images: LayerImageStore | null;
+}
+
+function lockTip(locked: boolean, editable: boolean, followsLocks: boolean): string {
+  if (!followsLocks) return locked ? "Locked: canvas clicks pass through this layer" : "Lock (canvas clicks will pass through)";
+  if (locked) return "Fixed design: end users can't edit this layer. Click to make it editable";
+  return editable ? "Editable by end users. Click to lock it as fixed design" : "Lock as fixed design";
 }
 
 /** Photoshop-style layers panel: topmost layer first, with thumbnails, visibility, locks, search and collapsible groups. */
@@ -90,7 +98,7 @@ function LayerRows(
     onToggleCollapsed: (id: string) => void;
   },
 ) {
-  const { nodes, depth, ancestorHidden, filter, collapsed, selectedId, mappedNodeIds, onSelect, isVisible, onToggleVisible, onToggleLocked, onToggleCollapsed } = props;
+  const { nodes, depth, ancestorHidden, filter, collapsed, selectedId, mappedNodeIds, onSelect, isVisible, onToggleVisible, onToggleLocked, followsLocks, onToggleCollapsed } = props;
   return (
     <>
       {[...nodes].reverse().map((node) => {
@@ -156,9 +164,9 @@ function LayerRows(
                 {node.type === "text" && <FontBadge node={node} />}
               </span>
               {mappedNodeIds.has(node.id) && (
-                <span className="badge field-pill" title="Mapped as an editable field">
+                <span className="badge field-pill" title="Editable by end users">
                   <PenLine size={11} strokeWidth={2.4} aria-hidden="true" />
-                  <span className="visually-hidden">Field</span>
+                  <span className="visually-hidden">Editable field</span>
                 </span>
               )}
               <button
@@ -166,7 +174,7 @@ function LayerRows(
                 className={`layer-icon-btn layer-lock${locked ? " active" : ""}`}
                 aria-pressed={locked}
                 aria-label={locked ? `Unlock ${node.name}` : `Lock ${node.name}`}
-                title={locked ? "Locked: canvas clicks pass through this layer" : "Lock (canvas clicks will pass through)"}
+                title={lockTip(locked, mappedNodeIds.has(node.id), followsLocks)}
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleLocked(node);

@@ -170,7 +170,9 @@ drive mouse, wheel, keyboard and Space+drag.)
 - Real PSD/PSB ingestion via `ag-psd` — layers, groups, multi-run text,
   smart objects, adjustment layers, blend-mode mapping with documented
   fidelity notes — running in a memory-capped, time-boxed child process so
-  a hostile or malformed file can't take down the worker.
+  a hostile or malformed file can't take down the worker. The layer tree
+  keeps Photoshop's order and nesting and every layer in it, empty layers,
+  empty groups and same-named siblings included.
 - Two compositors over the same scene graph: the worker's
   (`SceneCompositor`, for exports at any resolution) and the browser's
   (`canvas-renderer`, for both editing canvases, rendering only the
@@ -190,12 +192,15 @@ drive mouse, wheel, keyboard and Space+drag.)
   locks its contents) is a field: text layers become text, pixel/shape/smart
   object layers photo replacements, groups and adjustments show/hide
   toggles, labelled with the layer name and given permissive default rules
-  (`packages/scene-graph/src/autoFields.ts`). Fields are synced from lock
+  (`packages/scene-graph/src/autoFields.ts`); an empty layer, with nothing
+  for a photo to fill, is left out. So the admin's one job is marking what
+  must *not* be editable: the Layers panel shows a lock on every layer and
+  a pen on every editable one. Fields are synced from lock
   state at ingestion, on every lock change and again at publish; published
   versions' fields are frozen.
 - Admin field-mapping workspace (optional): a Photoshop-style layers panel
   (thumbnails, search, collapsible groups, view-only eye toggles, and locks
-  that are saved and make canvas clicks pass through) kept in sync with
+  that are saved, keep a layer fixed and make canvas clicks pass through) kept in sync with
   the canvas; double-click text to inspect its individual runs (font,
   size, colour, tracking); drop an image onto a pixel or smart-object layer
   to replace its raster; rename fields, change their type or tighten their

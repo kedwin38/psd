@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { lockingNode, type SceneGraph, type SceneNode } from "@psd-studio/scene-graph";
-import { AlertCircle, AlertTriangle, Box, Check, ChevronRight, Eye, FileWarning, Image, MousePointerClick, PanelLeft, PanelRight, Redo2, RefreshCw, Rocket, Type, Undo2, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Box, Check, ChevronRight, Eye, FileWarning, Image, MousePointerClick, PanelLeft, PanelRight, PenLine, Redo2, RefreshCw, Rocket, Type, Undo2, X } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { isTypingTarget } from "../lib/keyboard";
 import type { FieldType, Template, TemplateField, TemplateVersion } from "../lib/types";
@@ -462,6 +462,12 @@ export function TemplateWorkspacePage() {
                 Layers {sceneGraph && <span className="panel-count">{countNodes(sceneGraph.root)}</span>}
               </h3>
             </div>
+            {followsLocks && (
+              <p className="layers-hint">
+                <PenLine size={12} strokeWidth={2.4} aria-hidden="true" />
+                <span>End users can edit every unlocked layer. Lock the ones that must stay fixed.</span>
+              </p>
+            )}
             {sceneGraph && (
               <LayerTree
                 nodes={sceneGraph.root}
@@ -471,6 +477,7 @@ export function TemplateWorkspacePage() {
                 isVisible={isVisible}
                 onToggleVisible={toggleVisible}
                 onToggleLocked={toggleLocked}
+                followsLocks={followsLocks}
                 images={layerImages.store}
               />
             )}
@@ -527,7 +534,7 @@ export function TemplateWorkspacePage() {
               <>
                 <div className="panel-header">
                   <h3 className="panel-title">
-                    Mapped fields <span className="panel-count">{fields.length}</span>
+                    Editable fields <span className="panel-count">{fields.length}</span>
                   </h3>
                 </div>
                 <div className="panel-body">
@@ -560,7 +567,7 @@ export function TemplateWorkspacePage() {
                 <div className="panel-footer editor-tip">
                   <MousePointerClick size={14} aria-hidden="true" />
                   <span>
-                    {followsLocks && "Every unlocked layer is an editable field; lock a layer to keep it fixed. "}Click any layer to fine-tune its field. Double-click text to inspect its runs; drop an image on a pixel or smart object layer to replace it.
+                    Click any layer to fine-tune its field. Double-click text to inspect its runs; drop an image on a pixel or smart object layer to replace it.
                   </span>
                 </div>
               </>
