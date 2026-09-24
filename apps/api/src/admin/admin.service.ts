@@ -1,7 +1,19 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
+import type { Prisma } from "../generated/prisma";
 import type { AssignRoleDto, AuditLogQueryDto } from "./dto/admin.dto";
+
+// Credential material (passwordHash, TOTP secrets, passkeys, refresh tokens) never leaves the API.
+const USER_SUMMARY = {
+  id: true,
+  email: true,
+  displayName: true,
+  status: true,
+  mfaEnrolled: true,
+  createdAt: true,
+  roles: { select: { id: true, role: true, organizationId: true, categoryId: true, createdAt: true }, orderBy: { createdAt: "asc" } },
+} satisfies Prisma.UserSelect;
 
 @Injectable()
 export class AdminService {
@@ -11,10 +23,7 @@ export class AdminService {
   ) {}
 
   async listUsers() {
-    return this.prisma.user.findMany({
-      include: { roles: true },
-      orderBy: { createdAt: "desc" },
-    });
+    return this.prisma.user.findMany({ select: USER_SUMMARY, orderBy: { createdAt: "desc" } });
   }
 
   async assignRole(userId: string, dto: AssignRoleDto, actorId: string) {
