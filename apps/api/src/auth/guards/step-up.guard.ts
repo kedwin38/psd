@@ -14,7 +14,7 @@ export class StepUpGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user: AuthenticatedUser | undefined = request.user;
     if (!user?.steppedUp) {
-      throw new ForbiddenException("This action requires a fresh passkey re-authentication (step-up).");
+      throw new ForbiddenException("This action requires a fresh re-authentication with a passkey or authenticator code (step-up).");
     }
     return true;
   }

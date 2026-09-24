@@ -18,6 +18,7 @@ async function bootstrap() {
   app.enableCors({
     origin: config.get("CORS_ORIGIN"),
     credentials: true,
+    exposedHeaders: ["WWW-Authenticate"],
   });
   app.setGlobalPrefix("api/v1");
   app.enableShutdownHooks();

@@ -2,7 +2,8 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from
 import { Reflector } from "@nestjs/core";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 import { TokenService } from "../token.service";
-import type { AuthenticatedUser } from "../auth.types";
+import type { Response } from "express";
+import type { AccessTokenClaims, AuthenticatedUser } from "../auth.types";
 
 /**
  * Global guard: every route requires a valid access token unless marked
@@ -18,16 +19,25 @@ export class JwtAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [context.getHandler(), context.getClass()]);
     const request = context.switchToHttp().getRequest();
+    // The RFC 6750 challenge marks the 401s a fresh access token fixes, unlike an action's own rejections.
+    const response = context.switchToHttp().getResponse<Response>();
 
     const header = request.headers["authorization"];
     const token = typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : undefined;
 
     if (!token) {
       if (isPublic) return true;
+      response.setHeader("WWW-Authenticate", "Bearer");
       throw new UnauthorizedException("Missing access token.");
     }
 
-    const claims = this.tokens.verifyAccessToken(token);
+    let claims: AccessTokenClaims;
+    try {
+      claims = this.tokens.verifyAccessToken(token);
+    } catch (err) {
+      response.setHeader("WWW-Authenticate", 'Bearer error="invalid_token"');
+      throw err;
+    }
     const user: AuthenticatedUser = {
       id: claims.sub,
       email: claims.email,

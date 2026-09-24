@@ -1,4 +1,4 @@
-import { Inject, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import {
   generateAuthenticationOptions,
@@ -92,7 +92,7 @@ export class WebAuthnService {
   async generateAuthenticationOptionsFor(userId: string, purpose: ChallengePurpose = "authentication"): Promise<PublicKeyCredentialRequestOptionsJSON> {
     const credentials = await this.prisma.webAuthnCredential.findMany({ where: { userId } });
     if (credentials.length === 0) {
-      throw new UnauthorizedException("No passkeys registered for this account.");
+      throw new BadRequestException("No passkeys registered for this account.");
     }
     const options = await generateAuthenticationOptions({
       rpID: this.config.get("WEBAUTHN_RP_ID"),

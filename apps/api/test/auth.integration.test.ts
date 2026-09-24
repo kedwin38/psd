@@ -4,11 +4,14 @@ import type { INestApplication } from "@nestjs/common";
 import { createTestApp, resetDatabase, requireDist } from "./test-app";
 import type { PrismaService as PrismaServiceType } from "../src/prisma/prisma.service";
 import type { TokenService as TokenServiceType } from "../src/auth/token.service";
+import type { TotpService as TotpServiceType } from "../src/auth/totp.service";
+import { Secret, TOTP } from "otpauth";
 
 // Runtime classes come from the compiled dist build (see test-app.ts for why);
 // these `type`-only imports just give the test file real autocomplete/checking.
 const { PrismaService } = requireDist("../dist/prisma/prisma.service") as { PrismaService: new () => PrismaServiceType };
 const { TokenService } = requireDist("../dist/auth/token.service") as { TokenService: new (...args: never[]) => TokenServiceType };
+const { TotpService } = requireDist("../dist/auth/totp.service") as { TotpService: new (...args: never[]) => TotpServiceType };
 const { RoleName } = requireDist("../dist/generated/prisma") as typeof import("../src/generated/prisma");
 
 describe("Auth & RBAC integration", () => {
@@ -122,6 +125,73 @@ describe("Auth & RBAC integration", () => {
       expect(res.status).toBe(401);
     }
     expect(await prisma.totpCredential.count({ where: { userId: admin.id } })).toBe(0);
+  });
+});
+
+describe("Step-up with an authenticator code (accounts without a passkey)", () => {
+  let app: INestApplication;
+  let adminId: string;
+  let accessToken: string;
+  let secretBase32: string;
+  const http = () => request(app.getHttpServer());
+  const code = () => new TOTP({ secret: Secret.fromBase32(secretBase32) }).generate();
+
+  beforeAll(async () => {
+    app = await createTestApp();
+    const prisma = app.get(PrismaService);
+    const tokens = app.get(TokenService);
+    const totp = app.get(TotpService);
+    const admin = await prisma.user.create({
+      data: { email: "totp-only-admin@example.com", displayName: "TOTP Admin", status: "ACTIVE", roles: { create: { role: RoleName.SUPER_ADMIN } } },
+    });
+    adminId = admin.id;
+    ({ secretBase32 } = await totp.beginEnrollment(admin.id, admin.email));
+    await totp.confirmEnrollment(admin.id, code());
+    accessToken = tokens.issueAccessToken({ id: admin.id, email: admin.email, roles: [RoleName.SUPER_ADMIN], organizationId: null });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("offers TOTP, not a passkey, as the account's step-up method", async () => {
+    const res = await http().get("/api/v1/auth/step-up/methods").set("Authorization", `Bearer ${accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ methods: ["totp"] });
+  });
+
+  it("answers a passkey step-up attempt with a plain client error, not a session 401", async () => {
+    const res = await http().post("/api/v1/auth/step-up/options").set("Authorization", `Bearer ${accessToken}`);
+    expect(res.status).toBe(400);
+    expect(res.body.detail).toBe("No passkeys registered for this account.");
+  });
+
+  it("rejects a wrong code with a 403 that doesn't ask for a new access token", async () => {
+    const res = await http().post("/api/v1/auth/step-up/totp").set("Authorization", `Bearer ${accessToken}`).send({ code: "000000" });
+    expect(res.status).toBe(403);
+    expect(res.headers["www-authenticate"]).toBeUndefined();
+    const prisma = app.get(PrismaService);
+    expect(await prisma.auditLogEntry.count({ where: { actorId: adminId, action: "auth.stepup.totp.failed" } })).toBe(1);
+  });
+
+  it("issues a step-up token for a valid code that unlocks a step-up-protected action", async () => {
+    const prisma = app.get(PrismaService);
+    const category = await prisma.templateCategory.create({ data: { name: "Step-up TOTP" } });
+
+    const res = await http().post("/api/v1/auth/step-up/totp").set("Authorization", `Bearer ${accessToken}`).send({ code: code() });
+    expect(res.status).toBe(201);
+    const del = await http().delete(`/api/v1/categories/${category.id}`).set("Authorization", `Bearer ${accessToken}`).set("x-step-up-token", res.body.stepUpToken);
+    expect(del.status).toBe(200);
+    const audit = await prisma.auditLogEntry.findFirstOrThrow({ where: { actorId: adminId, action: "auth.stepup.verified" } });
+    expect(audit.metadata).toEqual({ method: "totp" });
+  });
+
+  it("marks only access-token failures with a bearer challenge", async () => {
+    const missing = await http().get("/api/v1/auth/me");
+    expect(missing.headers["www-authenticate"]).toBe("Bearer");
+    const invalid = await http().get("/api/v1/auth/me").set("Authorization", "Bearer expired");
+    expect(invalid.status).toBe(401);
+    expect(invalid.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
   });
 });
 

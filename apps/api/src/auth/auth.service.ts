@@ -13,6 +13,8 @@ export interface RequestContext {
   userAgent?: string;
 }
 
+export type StepUpMethod = "passkey" | "totp";
+
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -147,6 +149,15 @@ export class AuthService {
   }
 
   // --- Step-up (re-authentication for sensitive admin actions, spec §12) -------
+  // Either second factor a user can sign in with re-authenticates them: a passkey or, for accounts without one, TOTP.
+
+  async stepUpMethods(userId: string): Promise<{ methods: StepUpMethod[] }> {
+    const [passkeys, totp] = await Promise.all([this.prisma.webAuthnCredential.count({ where: { userId } }), this.totp.isEnrolled(userId)]);
+    const methods: StepUpMethod[] = [];
+    if (passkeys > 0) methods.push("passkey");
+    if (totp) methods.push("totp");
+    return { methods };
+  }
 
   async stepUpOptions(userId: string) {
     return this.webauthn.generateAuthenticationOptionsFor(userId, "step-up");
@@ -154,7 +165,20 @@ export class AuthService {
 
   async stepUpVerify(userId: string, response: object, ctx: RequestContext): Promise<{ stepUpToken: string }> {
     await this.webauthn.verifyAuthentication(userId, response as never, "step-up");
-    await this.audit.record({ actorId: userId, action: "auth.stepup.verified", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+    return this.issueStepUpFor(userId, "passkey", ctx);
+  }
+
+  async stepUpVerifyTotp(userId: string, code: string, ctx: RequestContext): Promise<{ stepUpToken: string }> {
+    const ok = await this.totp.verifyCode(userId, code);
+    if (!ok) {
+      await this.audit.record({ actorId: userId, action: "auth.stepup.totp.failed", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
+      throw new ForbiddenException("Invalid TOTP code.");
+    }
+    return this.issueStepUpFor(userId, "totp", ctx);
+  }
+
+  private async issueStepUpFor(userId: string, method: StepUpMethod, ctx: RequestContext): Promise<{ stepUpToken: string }> {
+    await this.audit.record({ actorId: userId, action: "auth.stepup.verified", resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent, metadata: { method } });
     return { stepUpToken: this.tokens.issueStepUpToken(userId) };
   }
 

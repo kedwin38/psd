@@ -12,6 +12,7 @@ import {
   PasswordLoginTotpSchema,
   RegisterSchema,
   SetPasswordSchema,
+  StepUpTotpSchema,
   TotpEnrollVerifySchema,
   WebAuthnLoginVerifySchema,
   WebAuthnRegisterVerifySchema,
@@ -20,6 +21,7 @@ import {
   type PasswordLoginTotpDto,
   type RegisterDto,
   type SetPasswordDto,
+  type StepUpTotpDto,
   type TotpEnrollVerifyDto,
   type WebAuthnLoginVerifyDto,
   type WebAuthnRegisterVerifyDto,
@@ -137,6 +139,11 @@ export class AuthController {
 
   // --- Step-up re-authentication (spec §12) ---------------------------------
 
+  @Get("step-up/methods")
+  async stepUpMethods(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.stepUpMethods(user.id);
+  }
+
   @Post("step-up/options")
   async stepUpOptions(@CurrentUser() user: AuthenticatedUser) {
     return this.auth.stepUpOptions(user.id);
@@ -145,6 +152,12 @@ export class AuthController {
   @Post("step-up/verify")
   async stepUpVerify(@CurrentUser() user: AuthenticatedUser, @Body(new ZodValidationPipe(WebAuthnLoginVerifySchema.omit({ email: true }))) body: { response: object }, @Req() req: Request) {
     return this.auth.stepUpVerify(user.id, body.response, this.ctx(req));
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post("step-up/totp")
+  async stepUpTotp(@CurrentUser() user: AuthenticatedUser, @Body(new ZodValidationPipe(StepUpTotpSchema)) body: StepUpTotpDto, @Req() req: Request) {
+    return this.auth.stepUpVerifyTotp(user.id, body.code, this.ctx(req));
   }
 
   // --- Refresh / logout / sessions ------------------------------------------

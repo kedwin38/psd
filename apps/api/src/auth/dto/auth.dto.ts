@@ -50,6 +50,11 @@ export const TotpEnrollVerifySchema = z.object({
 });
 export type TotpEnrollVerifyDto = z.infer<typeof TotpEnrollVerifySchema>;
 
+export const StepUpTotpSchema = z.object({
+  code: z.string().min(6).max(10),
+});
+export type StepUpTotpDto = z.infer<typeof StepUpTotpSchema>;
+
 export const RefreshSchema = z.object({
   refreshToken: z.string().min(1).optional(),
 });
