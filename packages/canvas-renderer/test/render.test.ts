@@ -1,8 +1,8 @@
 import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
-import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
+import type { Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
-import { measureTextBounds, renderScene, type Ctx2D } from "../src/index.js";
+import { measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
 
 const napiBuffer = (w: number, h: number) => createCanvas(w, h).getContext("2d") as unknown as Ctx2D;
 
@@ -89,6 +89,45 @@ describe("renderScene", () => {
     expect(rect.left).toBe(10);
     expect(rect.right).toBeGreaterThan(60);
     expect(rect.bottom).toBeCloseTo(20 + 20 + 24 + 5);
+  });
+
+  it("boxes each run's glyphs separately, tighter than the layer's stored bounds", () => {
+    const text = {
+      ...base("t", { left: 10, top: 20, right: 400, bottom: 120 }),
+      type: "text",
+      alignment: "left",
+      boxMode: "point",
+      runs: [
+        { text: "Big ", fontName: "Arial", fontSize: 40, color: { r: 0, g: 0, b: 0, a: 1 } },
+        { text: "small\nnext", fontName: "Arial", fontSize: 12, color: { r: 0, g: 0, b: 0, a: 1 } },
+      ],
+    } as Extract<SceneNode, { type: "text" }>;
+    const boxes = textRunBoxes(napiBuffer(1, 1), text);
+    expect(boxes.map((b) => b.run)).toEqual([0, 1, 1]);
+    const [big, small, next] = boxes.map((b) => b.rect) as [Rect, Rect, Rect];
+    expect(small.left).toBeGreaterThan(big.right);
+    expect(big.bottom - big.top).toBeGreaterThan(small.bottom - small.top);
+    expect(next.top).toBeGreaterThan(small.bottom);
+    expect(next.left).toBeLessThan(big.right);
+    // The trailing space of "Big " advances the pen but has no ink.
+    expect(big.right).toBeLessThan(small.left - 5);
+    for (const r of [big, small, next]) {
+      expect(r.left).toBeGreaterThanOrEqual(text.bounds.left - 2);
+      expect(r.right).toBeLessThan(200);
+    }
+  });
+
+  it("renders a panned, zoomed viewport through origin", async () => {
+    const graph = graphOf([pixel("red", { left: 0, top: 0, right: 40, bottom: 40 }), pixel("blue", { left: 60, top: 60, right: 100, bottom: 100 })]);
+    const images = new Map<string, Image>();
+    for (const id of ["red", "blue"]) images.set(id, await loadImage(assets[id as "red" | "blue"]));
+    const viewport = napiBuffer(50, 50);
+    // 2x zoom with scene point (60, 60) at the viewport's top-left.
+    renderScene(viewport, graph, { scale: 2, origin: { x: -120, y: -120 }, images: (id) => images.get(id) as unknown as CanvasImageSource, createBuffer: napiBuffer });
+    expect([...viewport.getImageData(10, 10, 1, 1).data]).toEqual([0, 0, 255, 255]);
+    renderScene(viewport, graph, { scale: 2, origin: { x: 0, y: 0 }, images: (id) => images.get(id) as unknown as CanvasImageSource, createBuffer: napiBuffer });
+    expect([...viewport.getImageData(10, 10, 1, 1).data]).toEqual([255, 0, 0, 255]);
+    expect(viewport.getImageData(49, 49, 1, 1).data[3]).toBe(255);
   });
 
   it("honors clipping for top-level layers (intentional divergence from the server)", async () => {

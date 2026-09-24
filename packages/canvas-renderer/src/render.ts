@@ -1,4 +1,4 @@
-import type { FieldOverride, GroupNode, Rect, SceneGraph, SceneNode, SmartObjectLayerNode, TextLayerNode } from "@psd-studio/scene-graph";
+import type { FieldOverride, GroupNode, Rect, SceneGraph, SceneNode, SmartObjectLayerNode, TextLayerNode, TextRun } from "@psd-studio/scene-graph";
 import { COMPOSITE_OPERATION } from "./blend.js";
 import { clipUnits, createDomBuffer, type BufferFactory, type ClipUnit, type Ctx2D } from "./buffer.js";
 import { cssFont, rgbaToCss } from "./text.js";
@@ -8,6 +8,8 @@ export type ImageLookup = (assetId: string) => CanvasImageSource | undefined;
 export interface SceneRenderOptions {
   /** Canvas pixels per scene (PSD) pixel. */
   scale: number;
+  /** Canvas-pixel position of the scene origin, for rendering a zoomed/panned viewport. */
+  origin?: { x: number; y: number };
   images: ImageLookup;
   /** View-only visibility (e.g. the layers panel eye); wins over field overrides and authored visibility. */
   visibility?: ReadonlyMap<string, boolean>;
@@ -15,7 +17,7 @@ export interface SceneRenderOptions {
   createBuffer?: BufferFactory;
 }
 
-/** Paints the whole graph into ctx, which must already be sized to graph dimensions × scale. */
+/** Paints the graph into ctx: the whole scene if ctx is sized to graph dimensions × scale, or whatever part of it origin puts in view. */
 export function renderScene(ctx: Ctx2D, graph: SceneGraph, options: SceneRenderOptions): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   const painter = new Painter(options);
@@ -34,10 +36,14 @@ export function isNodeVisible(node: SceneNode, visibility: ReadonlyMap<string, b
 class Painter {
   private readonly overrides = new Map<string, FieldOverride>();
   private readonly createBuffer: BufferFactory;
+  private readonly ox: number;
+  private readonly oy: number;
 
   constructor(private readonly options: SceneRenderOptions) {
     for (const o of options.overrides ?? []) this.overrides.set(o.nodeId, o);
     this.createBuffer = options.createBuffer ?? createDomBuffer;
+    this.ox = options.origin?.x ?? 0;
+    this.oy = options.origin?.y ?? 0;
   }
 
   private visible(node: SceneNode): boolean {
@@ -108,7 +114,7 @@ class Painter {
     ctx.save();
     ctx.globalAlpha = node.opacity;
     ctx.globalCompositeOperation = COMPOSITE_OPERATION[node.blendMode];
-    ctx.drawImage(image, left * scale, top * scale, Math.max(1, (right - left) * scale), Math.max(1, (bottom - top) * scale));
+    ctx.drawImage(image, left * scale + this.ox, top * scale + this.oy, Math.max(1, (right - left) * scale), Math.max(1, (bottom - top) * scale));
     ctx.restore();
   }
 
@@ -127,8 +133,8 @@ class Painter {
       override.crop.y * ih,
       Math.max(1, override.crop.width * iw),
       Math.max(1, override.crop.height * ih),
-      left * scale,
-      top * scale,
+      left * scale + this.ox,
+      top * scale + this.oy,
       Math.max(1, (right - left) * scale),
       Math.max(1, (bottom - top) * scale),
     );
@@ -152,17 +158,18 @@ class Painter {
       setTracking(ctx, style.tracking, sizePx);
       const lineHeight = (style.leadingPt ?? style.fontSize * 1.2) * scale;
       const boxWidth = (node.bounds.right - node.bounds.left) * scale;
-      let y = node.bounds.top * scale + sizePx;
+      let y = node.bounds.top * scale + this.oy + sizePx;
       for (const line of wrapText(ctx, override.text, boxWidth || sizePx * 20)) {
-        drawAlignedLine(ctx, line, node, scale, y);
+        drawAlignedLine(ctx, line, node.alignment, node.bounds.left * scale + this.ox, node.bounds.right * scale + this.ox, y);
         y += lineHeight;
       }
       ctx.restore();
       return;
     }
 
-    let x = node.bounds.left * scale;
-    let y = node.bounds.top * scale + node.runs[0]!.fontSize * scale;
+    const left = node.bounds.left * scale + this.ox;
+    let x = left;
+    let y = node.bounds.top * scale + this.oy + node.runs[0]!.fontSize * scale;
     for (const run of node.runs) {
       const sizePx = run.fontSize * scale;
       ctx.font = cssFont(run, sizePx);
@@ -171,7 +178,7 @@ class Painter {
       const segments = run.text.split(/\r\n|\r|\n/);
       for (let i = 0; i < segments.length; i++) {
         if (i > 0) {
-          x = node.bounds.left * scale;
+          x = left;
           y += (run.leadingPt ?? run.fontSize * 1.2) * scale;
         }
         ctx.fillText(segments[i]!, x, y);
@@ -185,27 +192,55 @@ class Painter {
 /** Scene-space extents of authored text exactly as paintText lays it out (for PSDs that store empty text-layer bounds). */
 export function measureTextBounds(ctx: Ctx2D, node: TextLayerNode): Rect {
   const { left, top } = node.bounds;
-  let x = left;
   let right = left;
-  let baseline = top + node.runs[0]!.fontSize;
+  let lastBaseline = top;
   let descent = 0;
+  layoutRuns(ctx, node, (_runIndex, run, x, baseline, metrics) => {
+    right = Math.max(right, x + metrics.width);
+    lastBaseline = baseline;
+    descent = Math.max(descent, run.fontSize * 0.25);
+  });
+  return { left, top, right, bottom: lastBaseline + descent };
+}
+
+export interface TextRunBox {
+  /** Index into node.runs; a run spanning several lines yields one box per line. */
+  run: number;
+  /** Scene-space glyph (ink) bounds, which can be much tighter or looser than the layer's stored bounds. */
+  rect: Rect;
+}
+
+/** Per-run glyph boxes of authored text, laid out exactly as paintText draws it; whitespace-only segments get no box. */
+export function textRunBoxes(ctx: Ctx2D, node: TextLayerNode): TextRunBox[] {
+  const boxes: TextRunBox[] = [];
+  layoutRuns(ctx, node, (run, _style, x, baseline, m) => {
+    const rect = { left: x - m.actualBoundingBoxLeft, top: baseline - m.actualBoundingBoxAscent, right: x + m.actualBoundingBoxRight, bottom: baseline + m.actualBoundingBoxDescent };
+    if (rect.right > rect.left && rect.bottom > rect.top) boxes.push({ run, rect });
+  });
+  return boxes;
+}
+
+type RunSegmentVisitor = (runIndex: number, run: TextRun, x: number, baseline: number, metrics: TextMetrics) => void;
+
+function layoutRuns(ctx: Ctx2D, node: TextLayerNode, visit: RunSegmentVisitor): void {
+  const { left, top } = node.bounds;
+  let x = left;
+  let baseline = top + node.runs[0]!.fontSize;
   ctx.save();
-  for (const run of node.runs) {
+  node.runs.forEach((run, runIndex) => {
     ctx.font = cssFont(run, run.fontSize);
     setTracking(ctx, run.tracking, run.fontSize);
-    const segments = run.text.split(/\r\n|\r|\n/);
-    for (let i = 0; i < segments.length; i++) {
+    run.text.split(/\r\n|\r|\n/).forEach((segment, i) => {
       if (i > 0) {
         x = left;
         baseline += run.leadingPt ?? run.fontSize * 1.2;
       }
-      x += ctx.measureText(segments[i]!).width;
-      right = Math.max(right, x);
-    }
-    descent = Math.max(descent, run.fontSize * 0.25);
-  }
+      const metrics = ctx.measureText(segment);
+      visit(runIndex, run, x, baseline, metrics);
+      x += metrics.width;
+    });
+  });
   ctx.restore();
-  return { left, top, right, bottom: baseline + descent };
 }
 
 // Diverges from server: SceneCompositor ignores tracking; PSD tracking is in 1/1000 em.
@@ -245,12 +280,10 @@ function wrapText(ctx: Ctx2D, text: string, maxWidthPx: number): string[] {
   return lines;
 }
 
-function drawAlignedLine(ctx: Ctx2D, line: string, node: TextLayerNode, scale: number, y: number): void {
-  const left = node.bounds.left * scale;
-  const right = node.bounds.right * scale;
+function drawAlignedLine(ctx: Ctx2D, line: string, alignment: TextLayerNode["alignment"], left: number, right: number, y: number): void {
   const width = ctx.measureText(line).width;
   let x = left;
-  if (node.alignment === "center") x = left + (right - left - width) / 2;
-  else if (node.alignment === "right") x = right - width;
+  if (alignment === "center") x = left + (right - left - width) / 2;
+  else if (alignment === "right") x = right - width;
   ctx.fillText(line, x, y);
 }
