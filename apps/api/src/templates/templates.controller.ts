@@ -1,7 +1,20 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { Throttle } from "@nestjs/throttler";
+import type { Response } from "express";
 import { TemplatesService, MAX_PSD_UPLOAD_BYTES } from "./templates.service";
-import { CreateFieldSchema, CreateTemplateSchema, UpdateFieldSchema, UpdateTemplateSchema, type CreateFieldDto, type CreateTemplateDto, type UpdateFieldDto, type UpdateTemplateDto } from "./dto/template.dto";
+import {
+  CreateFieldSchema,
+  CreateTemplateSchema,
+  UpdateFieldSchema,
+  UpdateNodeSchema,
+  UpdateTemplateSchema,
+  type CreateFieldDto,
+  type CreateTemplateDto,
+  type UpdateFieldDto,
+  type UpdateNodeDto,
+  type UpdateTemplateDto,
+} from "./dto/template.dto";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { Public } from "../auth/decorators/public.decorator";
 import { Roles } from "../auth/decorators/roles.decorator";
@@ -67,6 +80,28 @@ export class TemplatesController {
   @Get(":id/versions/:versionId/fields")
   listFields(@Param("id") id: string, @Param("versionId") versionId: string) {
     return this.templates.listFields(id, versionId);
+  }
+
+  // A template can have hundreds of layers, so this route gets its own budget instead of draining the global one.
+  @Throttle({ default: { limit: 3000, ttl: 60_000 } })
+  @Get(":id/versions/:versionId/layer-assets/:assetId")
+  async layerAsset(@Param("id") id: string, @Param("versionId") versionId: string, @Param("assetId") assetId: string, @Res() res: Response) {
+    const { bytes, mimeType } = await this.templates.getLayerAsset(id, versionId, assetId);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    res.send(bytes);
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Patch(":id/versions/:versionId/nodes/:nodeId")
+  updateNode(
+    @Param("id") id: string,
+    @Param("versionId") versionId: string,
+    @Param("nodeId") nodeId: string,
+    @Body(new ZodValidationPipe(UpdateNodeSchema)) body: UpdateNodeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.templates.updateNode(id, versionId, nodeId, body, user.id);
   }
 
   @Get(":id/versions/:versionId/preview")

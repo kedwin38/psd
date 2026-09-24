@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Queue } from "bullmq";
 import { Inject } from "@nestjs/common";
-import { findNodeById, type SceneGraph } from "@psd-studio/scene-graph";
+import { findNodeById, referencedAssetIds, type SceneGraph } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -10,7 +10,7 @@ import { DbBackedAssetSource } from "../rendering/db-asset-source";
 import { INGESTION_QUEUE_TOKEN } from "../queue/queue.module";
 import type { IngestionJobData } from "../queue/queue.constants";
 import { AssetOwnerType, IngestStatus, TemplateStatus } from "../generated/prisma";
-import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateTemplateDto } from "./dto/template.dto";
+import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, UpdateTemplateDto } from "./dto/template.dto";
 
 const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
 
@@ -122,6 +122,35 @@ export class TemplatesService {
       throw new BadRequestException(`Template version is not ready (status: ${version.ingestStatus}).`);
     }
     return version.sceneGraph as unknown as SceneGraph;
+  }
+
+  /** Streams one per-layer raster to the browser compositor; only assets this version's graph references are servable. */
+  async getLayerAsset(templateId: string, versionId: string, assetId: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    const sceneGraph = await this.getSceneGraph(templateId, versionId);
+    if (!referencedAssetIds(sceneGraph).has(assetId)) throw new NotFoundException("Asset not found in this template version.");
+    const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
+    if (!asset || asset.ownerType !== AssetOwnerType.TEMPLATE_LAYER) throw new NotFoundException("Asset not found in this template version.");
+    return { bytes: await this.storage.getAssetBytes(asset.storageKey), mimeType: asset.mimeType };
+  }
+
+  async updateNode(templateId: string, versionId: string, nodeId: string, dto: UpdateNodeDto, actorId: string) {
+    await this.getVersion(templateId, versionId);
+    const node = await this.prisma.$transaction(async (tx) => {
+      // Row lock so concurrent toggles on the same version can't overwrite each other's JSON edits.
+      await tx.$queryRaw`SELECT id FROM template_versions WHERE id = ${versionId} FOR UPDATE`;
+      const version = await tx.templateVersion.findUniqueOrThrow({ where: { id: versionId } });
+      if (version.ingestStatus !== IngestStatus.READY || !version.sceneGraph) {
+        throw new BadRequestException(`Template version is not ready (status: ${version.ingestStatus}).`);
+      }
+      const sceneGraph = version.sceneGraph as unknown as SceneGraph;
+      const target = findNodeById(sceneGraph, nodeId);
+      if (!target) throw new NotFoundException(`Node ${nodeId} does not exist in this template version's scene graph.`);
+      target.locked = dto.locked;
+      await tx.templateVersion.update({ where: { id: versionId }, data: { sceneGraph: sceneGraph as object } });
+      return target;
+    });
+    await this.audit.record({ actorId, action: "template.node.updated", resourceType: "TemplateVersion", resourceId: versionId, metadata: { templateId, nodeId, ...dto } });
+    return { id: node.id, locked: node.locked ?? false };
   }
 
   /** Renders the template exactly as authored, no field overrides — the admin's field-mapping preview. */

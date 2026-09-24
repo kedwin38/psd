@@ -27,3 +27,8 @@ export type CreateFieldDto = z.infer<typeof CreateFieldSchema>;
 
 export const UpdateFieldSchema = CreateFieldSchema.partial();
 export type UpdateFieldDto = z.infer<typeof UpdateFieldSchema>;
+
+export const UpdateNodeSchema = z.object({
+  locked: z.boolean(),
+});
+export type UpdateNodeDto = z.infer<typeof UpdateNodeSchema>;
