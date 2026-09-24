@@ -195,6 +195,25 @@ importers:
         specifier: ^8.3.0
         version: 8.3.0(@types/node@26.6.2)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
 
+  packages/canvas-renderer:
+    dependencies:
+      '@psd-studio/scene-graph':
+        specifier: workspace:*
+        version: link:../scene-graph
+    devDependencies:
+      '@napi-rs/canvas':
+        specifier: ^1.0.9
+        version: 1.0.9
+      '@psd-studio/psd-engine':
+        specifier: workspace:*
+        version: link:../psd-engine
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@26.6.2)(lightningcss@1.33.0)
+
   packages/psd-engine:
     dependencies:
       '@napi-rs/canvas':

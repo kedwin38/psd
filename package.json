@@ -14,7 +14,7 @@
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r --filter=!@psd-studio/e2e run test",
-    "test:unit": "pnpm --filter @psd-studio/scene-graph --filter @psd-studio/psd-engine run test",
+    "test:unit": "pnpm --filter @psd-studio/scene-graph --filter @psd-studio/psd-engine --filter @psd-studio/canvas-renderer run test",
     "test:api": "pnpm --filter @psd-studio/api run test",
     "test:e2e": "pnpm --filter @psd-studio/e2e run test",
     "prisma:generate": "pnpm --filter @psd-studio/api run prisma:generate",
