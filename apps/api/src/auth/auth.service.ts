@@ -13,6 +13,8 @@ export interface RequestContext {
   userAgent?: string;
 }
 
+export const ACCOUNT_SUSPENDED = "This account is suspended.";
+
 export type StepUpMethod = "passkey" | "totp";
 
 export interface TokenPair {
@@ -44,6 +46,13 @@ export class AuthService {
       organizationId: user.organizationId,
       steppedUp: false,
     };
+  }
+
+  /** Suspension is checked only once a credential has verified, so it never tells a stranger which accounts exist. */
+  private async loadActiveUser(userId: string): Promise<AuthenticatedUser> {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { status: true } });
+    if (user.status === UserStatus.SUSPENDED) throw new ForbiddenException(ACCOUNT_SUSPENDED);
+    return this.loadAuthenticatedUser(userId);
   }
 
   private isAdminRole(roles: RoleName[]): boolean {
@@ -131,6 +140,7 @@ export class AuthService {
       await this.audit.record({ actorId: user.id, action: "auth.login.password.failed", resourceType: "User", resourceId: user.id, ip: ctx.ip, userAgent: ctx.userAgent });
       throw new UnauthorizedException("Invalid email or password.");
     }
+    if (user.status === UserStatus.SUSPENDED) throw new ForbiddenException(ACCOUNT_SUSPENDED);
     const enrolled = await this.totp.isEnrolled(user.id);
     if (!enrolled) {
       throw new ForbiddenException("Password login requires TOTP to be enrolled on this account. Enroll TOTP or use a passkey.");
@@ -185,7 +195,7 @@ export class AuthService {
   // --- Session issuance / refresh / logout -------------------------------------
 
   private async issueSessionFor(userId: string, auditAction: string, ctx: RequestContext): Promise<TokenPair> {
-    const authUser = await this.loadAuthenticatedUser(userId);
+    const authUser = await this.loadActiveUser(userId);
     const accessToken = this.tokens.issueAccessToken(authUser);
     const refresh = await this.tokens.issueRefreshToken(userId, { ip: ctx.ip, userAgent: ctx.userAgent });
     await this.audit.record({ actorId: userId, action: auditAction, resourceType: "User", resourceId: userId, ip: ctx.ip, userAgent: ctx.userAgent });
@@ -194,7 +204,7 @@ export class AuthService {
 
   async refresh(rawRefreshToken: string, ctx: RequestContext): Promise<TokenPair> {
     const { userId, issued } = await this.tokens.rotateRefreshToken(rawRefreshToken, ctx);
-    const authUser = await this.loadAuthenticatedUser(userId);
+    const authUser = await this.loadActiveUser(userId);
     const accessToken = this.tokens.issueAccessToken(authUser);
     return { accessToken, refreshToken: issued.raw, refreshTokenExpiresAt: issued.expiresAt };
   }

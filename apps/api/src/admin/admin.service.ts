@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
-import type { Prisma } from "../generated/prisma";
-import type { AssignRoleDto, AuditLogQueryDto } from "./dto/admin.dto";
+import { TokenService } from "../auth/token.service";
+import { UserStatus, type Prisma } from "../generated/prisma";
+import type { AssignRoleDto, AuditLogQueryDto, SetUserStatusDto } from "./dto/admin.dto";
 
 // Credential material (passwordHash, TOTP secrets, passkeys, refresh tokens) never leaves the API.
 const USER_SUMMARY = {
@@ -20,6 +21,7 @@ export class AdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly tokens: TokenService,
   ) {}
 
   async listUsers() {
@@ -46,6 +48,16 @@ export class AdminService {
     if (!assignment) throw new NotFoundException("Role assignment not found.");
     await this.prisma.userRoleAssignment.delete({ where: { id: assignmentId } });
     await this.audit.record({ actorId, action: "admin.role.revoked", resourceType: "UserRoleAssignment", resourceId: assignmentId, metadata: { userId: assignment.userId, role: assignment.role } });
+  }
+
+  async setUserStatus(userId: string, dto: SetUserStatusDto, actorId: string) {
+    if (userId === actorId) throw new BadRequestException("You cannot change the status of your own account.");
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException("User not found.");
+    const updated = await this.prisma.user.update({ where: { id: userId }, data: { status: dto.status }, select: USER_SUMMARY });
+    if (dto.status === UserStatus.SUSPENDED) await this.tokens.revokeAllSessionsForUser(userId);
+    await this.audit.record({ actorId, action: "admin.user.status_changed", resourceType: "User", resourceId: userId, metadata: { from: user.status, to: dto.status } });
+    return updated;
   }
 
   async auditLog(query: AuditLogQueryDto) {
