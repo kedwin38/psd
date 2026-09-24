@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Queue } from "bullmq";
 import { Inject } from "@nestjs/common";
-import { findNodeById, referencedAssetIds, type SceneGraph } from "@psd-studio/scene-graph";
+import sharp from "sharp";
+import { findNodeById, referencedAssetIds, type PixelLayerNode, type SceneGraph, type SceneNode, type SmartObjectLayerNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -10,12 +11,27 @@ import { DbBackedAssetSource } from "../rendering/db-asset-source";
 import { INGESTION_QUEUE_TOKEN } from "../queue/queue.module";
 import type { IngestionJobData } from "../queue/queue.constants";
 import { AssetOwnerType, IngestStatus, TemplateStatus } from "../generated/prisma";
+import { sniffImageMime } from "../common/image-sniff";
 import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, UpdateTemplateDto } from "./dto/template.dto";
 
 const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
 
 const PSD_MAGIC = Buffer.from("8BPS", "ascii");
 export const MAX_PSD_UPLOAD_BYTES = 200 * 1024 * 1024;
+export const MAX_LAYER_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_LAYER_IMAGE_PIXELS = 100_000_000;
+
+function rasterImageAssetId(node: SceneNode): string | null {
+  return node.type === "pixel" || node.type === "shape" || node.type === "smartObject" ? node.imageAssetId : null;
+}
+
+function assertImageReplaceable(node: SceneNode, publishedAt: Date | null): asserts node is PixelLayerNode | SmartObjectLayerNode {
+  // Projects pin a version, so swapping art under a published one would silently change users' designs and exports.
+  if (publishedAt) throw new BadRequestException("This version is published, so its layer images are frozen. Upload a new version to change them.");
+  if (node.type !== "pixel" && node.type !== "smartObject") {
+    throw new BadRequestException(`Only image and smart object layers accept a replacement image ("${node.name}" is a ${node.type} layer).`);
+  }
+}
 
 @Injectable()
 export class TemplatesService {
@@ -135,8 +151,78 @@ export class TemplatesService {
 
   async updateNode(templateId: string, versionId: string, nodeId: string, dto: UpdateNodeDto, actorId: string) {
     await this.getVersion(templateId, versionId);
-    const node = await this.prisma.$transaction(async (tx) => {
-      // Row lock so concurrent toggles on the same version can't overwrite each other's JSON edits.
+    if (dto.imageAssetId !== undefined) {
+      const asset = await this.prisma.asset.findUnique({ where: { id: dto.imageAssetId } });
+      // Only layer rasters: never let a template point at an end user's upload or an export.
+      if (!asset || asset.ownerType !== AssetOwnerType.TEMPLATE_LAYER) throw new BadRequestException("Unknown layer image asset.");
+    }
+    const { node, result: previousImageAssetId } = await this.mutateNode(versionId, nodeId, (target, version) => {
+      const previous = rasterImageAssetId(target);
+      if (dto.imageAssetId !== undefined) {
+        assertImageReplaceable(target, version.publishedAt);
+        target.imageAssetId = dto.imageAssetId;
+      }
+      if (dto.locked !== undefined) target.locked = dto.locked;
+      return previous;
+    });
+    await this.audit.record({
+      actorId,
+      action: "template.node.updated",
+      resourceType: "TemplateVersion",
+      resourceId: versionId,
+      metadata: { templateId, nodeId, ...dto, ...(dto.imageAssetId !== undefined ? { previousImageAssetId } : {}) },
+    });
+    return { id: node.id, locked: node.locked ?? false, imageAssetId: rasterImageAssetId(node) };
+  }
+
+  /** Replaces a pixel/smart-object layer's own raster (the template's placeholder art), cover-fitted to the layer's bounds. */
+  async replaceNodeImage(templateId: string, versionId: string, nodeId: string, file: { buffer: Buffer }, actorId: string) {
+    const version = await this.getVersion(templateId, versionId);
+    const sceneGraph = await this.getSceneGraph(templateId, versionId);
+    const node = findNodeById(sceneGraph, nodeId);
+    if (!node) throw new NotFoundException(`Node ${nodeId} does not exist in this template version's scene graph.`);
+    assertImageReplaceable(node, version.publishedAt);
+
+    if (file.buffer.length === 0) throw new BadRequestException("Empty file.");
+    if (file.buffer.length > MAX_LAYER_IMAGE_BYTES) throw new BadRequestException(`Image exceeds the ${MAX_LAYER_IMAGE_BYTES} byte limit.`);
+    const sniffed = sniffImageMime(file.buffer);
+    if (!sniffed) throw new BadRequestException("Unsupported or unrecognized image file type (PNG, JPEG or WebP only).");
+
+    const metadata = await sharp(file.buffer).metadata().catch(() => null);
+    if (!metadata?.width || !metadata.height) throw new BadRequestException("Could not read image dimensions.");
+    if (metadata.width * metadata.height > MAX_LAYER_IMAGE_PIXELS) throw new BadRequestException(`Image exceeds the ${MAX_LAYER_IMAGE_PIXELS} pixel limit.`);
+    const { left, top, right, bottom } = node.bounds;
+    const width = Math.max(1, Math.round(right - left));
+    const height = Math.max(1, Math.round(bottom - top));
+    // EXIF orientation swaps the effective dimensions.
+    const [imageW, imageH] = (metadata.orientation ?? 1) >= 5 ? [metadata.height, metadata.width] : [metadata.width, metadata.height];
+    // Placeholder art ships in print exports, so it may be cropped to fit but never upscaled.
+    if (imageW < width || imageH < height) {
+      throw new BadRequestException(`Image must be at least ${width}x${height}px to fill this layer without upscaling (got ${imageW}x${imageH}).`);
+    }
+
+    const png = await sharp(file.buffer).rotate().resize(width, height, { fit: "cover" }).png().toBuffer();
+    const asset = await this.storage.storeAsset({ data: png, mimeType: "image/png", ownerType: AssetOwnerType.TEMPLATE_LAYER, hint: `layer_${nodeId}`, width, height });
+
+    const { result: previousImageAssetId } = await this.mutateNode(versionId, nodeId, (target, current) => {
+      assertImageReplaceable(target, current.publishedAt);
+      const previous = target.imageAssetId;
+      target.imageAssetId = asset.id;
+      return previous;
+    });
+    await this.audit.record({
+      actorId,
+      action: "template.node.image_replaced",
+      resourceType: "TemplateVersion",
+      resourceId: versionId,
+      metadata: { templateId, nodeId, imageAssetId: asset.id, previousImageAssetId, width, height },
+    });
+    return { id: nodeId, imageAssetId: asset.id, previousImageAssetId, width, height };
+  }
+
+  private async mutateNode<T>(versionId: string, nodeId: string, mutate: (node: SceneNode, version: { publishedAt: Date | null }) => T) {
+    return this.prisma.$transaction(async (tx) => {
+      // Row lock so concurrent edits on the same version can't overwrite each other's JSON edits.
       await tx.$queryRaw`SELECT id FROM template_versions WHERE id = ${versionId} FOR UPDATE`;
       const version = await tx.templateVersion.findUniqueOrThrow({ where: { id: versionId } });
       if (version.ingestStatus !== IngestStatus.READY || !version.sceneGraph) {
@@ -145,12 +231,10 @@ export class TemplatesService {
       const sceneGraph = version.sceneGraph as unknown as SceneGraph;
       const target = findNodeById(sceneGraph, nodeId);
       if (!target) throw new NotFoundException(`Node ${nodeId} does not exist in this template version's scene graph.`);
-      target.locked = dto.locked;
+      const result = mutate(target, version);
       await tx.templateVersion.update({ where: { id: versionId }, data: { sceneGraph: sceneGraph as object } });
-      return target;
+      return { node: target, result };
     });
-    await this.audit.record({ actorId, action: "template.node.updated", resourceType: "TemplateVersion", resourceId: versionId, metadata: { templateId, nodeId, ...dto } });
-    return { id: node.id, locked: node.locked ?? false };
   }
 
   /** Renders the template exactly as authored, no field overrides — the admin's field-mapping preview. */

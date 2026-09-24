@@ -8,24 +8,10 @@ import { StorageService } from "../storage/storage.service";
 import { DbBackedAssetSource } from "../rendering/db-asset-source";
 import { loadFieldOverrides } from "../rendering/field-overrides";
 import { AssetOwnerType, TemplateStatus } from "../generated/prisma";
+import { sniffImageMime } from "../common/image-sniff";
 import type { CreateProjectDto, PatchFieldValueDto } from "./dto/project.dto";
 
 const PREVIEW_MAX_DIMENSION = 1000;
-const ALLOWED_UPLOAD_SIGNATURES: Array<{ mime: string; bytes: number[] }> = [
-  { mime: "image/png", bytes: [0x89, 0x50, 0x4e, 0x47] },
-  { mime: "image/jpeg", bytes: [0xff, 0xd8, 0xff] },
-];
-
-function sniffImageMime(buffer: Buffer): string | null {
-  for (const sig of ALLOWED_UPLOAD_SIGNATURES) {
-    if (buffer.subarray(0, sig.bytes.length).equals(Buffer.from(sig.bytes))) return sig.mime;
-  }
-  // WebP: "RIFF"...."WEBP"
-  if (buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") {
-    return "image/webp";
-  }
-  return null;
-}
 
 @Injectable()
 export class ProjectsService {

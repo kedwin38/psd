@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post,
 import { FileInterceptor } from "@nestjs/platform-express";
 import { Throttle } from "@nestjs/throttler";
 import type { Response } from "express";
-import { TemplatesService, MAX_PSD_UPLOAD_BYTES } from "./templates.service";
+import { TemplatesService, MAX_LAYER_IMAGE_BYTES, MAX_PSD_UPLOAD_BYTES } from "./templates.service";
 import {
   CreateFieldSchema,
   CreateTemplateSchema,
@@ -102,6 +102,20 @@ export class TemplatesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.templates.updateNode(id, versionId, nodeId, body, user.id);
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Post(":id/versions/:versionId/nodes/:nodeId/image")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: MAX_LAYER_IMAGE_BYTES } }))
+  replaceNodeImage(
+    @Param("id") id: string,
+    @Param("versionId") versionId: string,
+    @Param("nodeId") nodeId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (!file) throw new BadRequestException('No file uploaded (expected multipart field "file").');
+    return this.templates.replaceNodeImage(id, versionId, nodeId, { buffer: file.buffer }, user.id);
   }
 
   @Get(":id/versions/:versionId/preview")

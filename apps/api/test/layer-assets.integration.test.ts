@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import sharp from "sharp";
 import type { INestApplication } from "@nestjs/common";
 import type { SceneGraph } from "@psd-studio/scene-graph";
 import { createTestApp, resetDatabase, requireDist } from "./test-app";
@@ -14,6 +15,16 @@ const { AssetOwnerType, IngestStatus, RoleName } = requireDist("../dist/generate
 
 const LAYER_PNG = Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000", "hex");
 
+const solidPng = (width: number, height: number) => sharp({ create: { width, height, channels: 4, background: "#00ff00" } }).png().toBuffer();
+
+function binary(res: request.Test) {
+  return res.buffer(true).parse((r, cb) => {
+    const chunks: Buffer[] = [];
+    r.on("data", (c: Buffer) => chunks.push(c));
+    r.on("end", () => cb(null, Buffer.concat(chunks)));
+  });
+}
+
 describe("Per-layer assets and node updates for the browser compositor", () => {
   let app: INestApplication;
   let base: string;
@@ -22,6 +33,7 @@ describe("Per-layer assets and node updates for the browser compositor", () => {
   let layerAssetId: string;
   let foreignAssetId: string;
   let versionId: string;
+  let templateId: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -76,6 +88,32 @@ describe("Per-layer assets and node updates for the browser compositor", () => {
               bounds: { left: 0, top: 0, right: 1, bottom: 1 },
               imageAssetId: layerAssetId,
             },
+            {
+              type: "pixel",
+              id: "n_banner",
+              path: "Card/Banner",
+              name: "Banner",
+              visible: true,
+              opacity: 1,
+              blendMode: "normal",
+              clipping: false,
+              bounds: { left: 10, top: 10, right: 60, bottom: 30 },
+              imageAssetId: layerAssetId,
+            },
+            {
+              type: "text",
+              id: "n_title",
+              path: "Card/Title",
+              name: "Title",
+              visible: true,
+              opacity: 1,
+              blendMode: "normal",
+              clipping: false,
+              bounds: { left: 0, top: 50, right: 100, bottom: 70 },
+              runs: [{ text: "Hello", fontName: "ArialMT", fontSize: 16, color: { r: 0, g: 0, b: 0, a: 1 } }],
+              alignment: "left",
+              boxMode: "point",
+            },
           ],
         },
       ],
@@ -84,6 +122,7 @@ describe("Per-layer assets and node updates for the browser compositor", () => {
       data: { templateId: template.id, versionNo: 1, psdAssetId: psd.id, ingestStatus: IngestStatus.READY, sceneGraph: sceneGraph as object, createdById: admin.id },
     });
     versionId = version.id;
+    templateId = template.id;
     base = `/api/v1/templates/${template.id}/versions/${version.id}`;
   });
 
@@ -123,7 +162,7 @@ describe("Per-layer assets and node updates for the browser compositor", () => {
       .set("Authorization", `Bearer ${adminToken}`)
       .send({ locked: true });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ id: "n_photo", locked: true });
+    expect(res.body).toEqual({ id: "n_photo", locked: true, imageAssetId: layerAssetId });
 
     const version = await app.get(PrismaService).templateVersion.findUniqueOrThrow({ where: { id: versionId } });
     const graph = version.sceneGraph as unknown as SceneGraph;
@@ -136,5 +175,83 @@ describe("Per-layer assets and node updates for the browser compositor", () => {
     expect((await request(server).patch(`${base}/nodes/n_photo`).set("Authorization", `Bearer ${endUserToken}`).send({ locked: false })).status).toBe(403);
     expect((await request(server).patch(`${base}/nodes/n_missing`).set("Authorization", `Bearer ${adminToken}`).send({ locked: false })).status).toBe(404);
     expect((await request(server).patch(`${base}/nodes/n_photo`).set("Authorization", `Bearer ${adminToken}`).send({ locked: "yes" })).status).toBe(400);
+  });
+
+  it("replaces a layer's raster with a cover-fitted PNG, serves it, and stops serving the old one", async () => {
+    const server = app.getHttpServer();
+    const res = await request(server)
+      .post(`${base}/nodes/n_banner/image`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .attach("file", await solidPng(120, 30), { filename: "art.png", contentType: "image/png" });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: "n_banner", previousImageAssetId: layerAssetId, width: 50, height: 20 });
+    const newAssetId = res.body.imageAssetId as string;
+    expect(newAssetId).not.toBe(layerAssetId);
+
+    const served = await binary(request(server).get(`${base}/layer-assets/${newAssetId}`).set("Authorization", `Bearer ${adminToken}`));
+    expect(served.status).toBe(200);
+    expect(served.headers["content-type"]).toContain("image/png");
+    const meta = await sharp(served.body as Buffer).metadata();
+    expect([meta.width, meta.height]).toEqual([50, 20]);
+
+    // n_photo still references the original asset, so it stays servable.
+    expect((await request(server).get(`${base}/layer-assets/${layerAssetId}`).set("Authorization", `Bearer ${adminToken}`)).status).toBe(200);
+
+    const audit = await app.get(PrismaService).auditLogEntry.findFirst({ where: { action: "template.node.image_replaced", resourceId: versionId } });
+    expect(audit?.metadata).toMatchObject({ templateId, nodeId: "n_banner", imageAssetId: newAssetId, previousImageAssetId: layerAssetId });
+
+    // Undo path: re-point the node at its previous raster.
+    const undo = await request(server).patch(`${base}/nodes/n_banner`).set("Authorization", `Bearer ${adminToken}`).send({ imageAssetId: layerAssetId });
+    expect(undo.status).toBe(200);
+    expect(undo.body).toEqual({ id: "n_banner", locked: false, imageAssetId: layerAssetId });
+    expect((await request(server).get(`${base}/layer-assets/${newAssetId}`).set("Authorization", `Bearer ${adminToken}`)).status).toBe(404);
+  });
+
+  it("validates replacement images by content, not by declared type, and refuses upscaling", async () => {
+    const server = app.getHttpServer();
+    const post = (nodeId: string, data: Buffer, contentType = "image/png") =>
+      request(server).post(`${base}/nodes/${nodeId}/image`).set("Authorization", `Bearer ${adminToken}`).attach("file", data, { filename: "x.png", contentType });
+
+    const spoofed = await post("n_banner", Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"));
+    expect(spoofed.status).toBe(400);
+    expect(spoofed.body.detail).toMatch(/unrecognized image file type/i);
+
+    const tooSmall = await post("n_banner", await solidPng(40, 40));
+    expect(tooSmall.status).toBe(400);
+    expect(tooSmall.body.detail).toMatch(/at least 50x20px/);
+
+    const textLayer = await post("n_title", await solidPng(200, 200));
+    expect(textLayer.status).toBe(400);
+    expect(textLayer.body.detail).toMatch(/text layer/);
+
+    expect((await post("n_missing", await solidPng(10, 10))).status).toBe(404);
+    expect((await request(server).post(`${base}/nodes/n_banner/image`).set("Authorization", `Bearer ${adminToken}`)).status).toBe(400);
+    const endUser = await request(server)
+      .post(`${base}/nodes/n_banner/image`)
+      .set("Authorization", `Bearer ${endUserToken}`)
+      .attach("file", await solidPng(120, 30), { filename: "x.png", contentType: "image/png" });
+    expect(endUser.status).toBe(403);
+  });
+
+  it("only re-points layers at template layer rasters", async () => {
+    const server = app.getHttpServer();
+    const patch = (nodeId: string, body: object) => request(server).patch(`${base}/nodes/${nodeId}`).set("Authorization", `Bearer ${adminToken}`).send(body);
+    expect((await patch("n_banner", { imageAssetId: foreignAssetId })).status).toBe(400);
+    expect((await patch("n_banner", { imageAssetId: "not-a-uuid" })).status).toBe(400);
+    expect((await patch("n_title", { imageAssetId: layerAssetId })).status).toBe(400);
+    expect((await patch("n_banner", {})).status).toBe(400);
+  });
+
+  it("freezes layer images once the version is published", async () => {
+    await app.get(PrismaService).templateVersion.update({ where: { id: versionId }, data: { publishedAt: new Date() } });
+    const server = app.getHttpServer();
+    const res = await request(server)
+      .post(`${base}/nodes/n_banner/image`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .attach("file", await solidPng(120, 30), { filename: "x.png", contentType: "image/png" });
+    expect(res.status).toBe(400);
+    expect(res.body.detail).toMatch(/published/);
+    expect((await request(server).patch(`${base}/nodes/n_banner`).set("Authorization", `Bearer ${adminToken}`).send({ imageAssetId: layerAssetId })).status).toBe(400);
+    expect((await request(server).patch(`${base}/nodes/n_banner`).set("Authorization", `Bearer ${adminToken}`).send({ locked: true })).status).toBe(200);
   });
 });

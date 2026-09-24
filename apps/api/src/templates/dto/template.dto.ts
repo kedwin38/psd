@@ -28,7 +28,11 @@ export type CreateFieldDto = z.infer<typeof CreateFieldSchema>;
 export const UpdateFieldSchema = CreateFieldSchema.partial();
 export type UpdateFieldDto = z.infer<typeof UpdateFieldSchema>;
 
-export const UpdateNodeSchema = z.object({
-  locked: z.boolean(),
-});
+export const UpdateNodeSchema = z
+  .object({
+    locked: z.boolean().optional(),
+    /** Re-points a pixel/smart-object layer at an existing layer raster, e.g. to undo an image replacement. */
+    imageAssetId: z.string().uuid().optional(),
+  })
+  .refine((dto) => dto.locked !== undefined || dto.imageAssetId !== undefined, { message: "Provide locked and/or imageAssetId." });
 export type UpdateNodeDto = z.infer<typeof UpdateNodeSchema>;
