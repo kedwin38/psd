@@ -58,6 +58,14 @@ describe("hitTest", () => {
     expect(pick(clipped, 75, 75)).toBe("under");
   });
 
+  it("uses boundsOf for layers whose stored bounds are empty, even inside a group", () => {
+    const text = { ...node("name", [40, 260, 40, 260]), type: "text" } as SceneNode;
+    const g = graphOf([node("under", [0, 0, 600, 380]), group("card", [text])]);
+    expect(pick(g, 50, 270)).toBe("under");
+    const boundsOf = (n: SceneNode) => (n.id === "name" ? { left: 40, top: 260, right: 160, bottom: 295 } : n.bounds);
+    expect(hitTest({ ...g, width: 600, height: 380 }, 50, 270, { isVisible: visible, boundsOf })?.id).toBe("name");
+  });
+
   it("ignores full-canvas adjustment layers", () => {
     const adj = graphOf([node("photo", [0, 0, 100, 100]), { ...node("curves", [0, 0, 100, 100]), type: "adjustment", adjustmentKind: "curves" } as SceneNode]);
     expect(pick(adj, 50, 50)).toBe("photo");

@@ -2,7 +2,7 @@ import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
 import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
-import { renderScene, type Ctx2D } from "../src/index.js";
+import { measureTextBounds, renderScene, type Ctx2D } from "../src/index.js";
 
 const napiBuffer = (w: number, h: number) => createCanvas(w, h).getContext("2d") as unknown as Ctx2D;
 
@@ -75,6 +75,20 @@ describe("renderScene", () => {
     expect(client(50, 50)).toEqual([0, 255, 0, 255]);
     const { client: hiddenBg } = await renderBoth(graph, assets, new Map([["bg", false]]));
     expect(hiddenBg(50, 50)[3]).toBe(0);
+  });
+
+  it("measures text extents for layers stored with empty bounds", () => {
+    const text = {
+      ...base("t", { left: 10, top: 20, right: 10, bottom: 20 }),
+      type: "text",
+      alignment: "left",
+      boxMode: "point",
+      runs: [{ text: "Hello\nWide world", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    } as SceneNode;
+    const rect = measureTextBounds(napiBuffer(1, 1), text as Extract<SceneNode, { type: "text" }>);
+    expect(rect.left).toBe(10);
+    expect(rect.right).toBeGreaterThan(60);
+    expect(rect.bottom).toBeCloseTo(20 + 20 + 24 + 5);
   });
 
   it("honors clipping for top-level layers (intentional divergence from the server)", async () => {

@@ -1,5 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { hitTest, isNodeVisible, rasterAssetId, renderScene, type LayerImageStore } from "@psd-studio/canvas-renderer";
+import {
+  createDomBuffer,
+  hitTest,
+  isNodeVisible,
+  measureTextBounds,
+  rasterAssetId,
+  renderScene,
+  type Ctx2D,
+  type LayerImageStore,
+} from "@psd-studio/canvas-renderer";
 import type { Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { findNode } from "./sceneTree";
 
@@ -56,14 +65,30 @@ export function SceneCanvas({
 
   const selected = useMemo(() => (selectedId ? findNode(graph.root, selectedId) : null), [graph, selectedId]);
 
+  const boundsOf = useMemo(() => {
+    const measured = new Map<string, Rect>();
+    let measureCtx: Ctx2D | null = null;
+    return (node: SceneNode): Rect => {
+      const { left, top, right, bottom } = node.bounds;
+      if (node.type !== "text" || (right > left && bottom > top)) return node.bounds;
+      let rect = measured.get(node.id);
+      if (!rect) {
+        measureCtx ??= createDomBuffer(1, 1);
+        rect = measureTextBounds(measureCtx, node);
+        measured.set(node.id, rect);
+      }
+      return rect;
+    };
+  }, [graph]);
+
   useEffect(() => {
     const ctx = overlayRef.current?.getContext("2d");
     if (!ctx || fit <= 0) return;
     ctx.clearRect(0, 0, pixelWidth, pixelHeight);
     const cssPx = renderScale / fit;
-    if (hover && hover.id !== selected?.id) outline(ctx, hover.bounds, renderScale, cssPx, false);
-    if (selected) outline(ctx, selected.bounds, renderScale, cssPx, true);
-  }, [selected, hover, renderScale, pixelWidth, pixelHeight, fit]);
+    if (hover && hover.id !== selected?.id) outline(ctx, boundsOf(hover), renderScale, cssPx, false);
+    if (selected) outline(ctx, boundsOf(selected), renderScale, cssPx, true);
+  }, [selected, hover, boundsOf, renderScale, pixelWidth, pixelHeight, fit]);
 
   const nodeAt = (e: PointerEvent<HTMLCanvasElement>): SceneNode | null => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -72,6 +97,7 @@ export function SceneCanvas({
     return hitTest(graph, x, y, {
       isVisible: (n) => isNodeVisible(n, visibility),
       isPickable,
+      boundsOf,
       alphaAt: (n, px, py) => {
         const assetId = rasterAssetId(n);
         if (!assetId || !images) return undefined;

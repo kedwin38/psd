@@ -1,4 +1,4 @@
-import type { FieldOverride, GroupNode, SceneGraph, SceneNode, SmartObjectLayerNode, TextLayerNode } from "@psd-studio/scene-graph";
+import type { FieldOverride, GroupNode, Rect, SceneGraph, SceneNode, SmartObjectLayerNode, TextLayerNode } from "@psd-studio/scene-graph";
 import { COMPOSITE_OPERATION } from "./blend.js";
 import { clipUnits, createDomBuffer, type BufferFactory, type ClipUnit, type Ctx2D } from "./buffer.js";
 import { cssFont, rgbaToCss } from "./text.js";
@@ -180,6 +180,32 @@ class Painter {
     }
     ctx.restore();
   }
+}
+
+/** Scene-space extents of authored text exactly as paintText lays it out (for PSDs that store empty text-layer bounds). */
+export function measureTextBounds(ctx: Ctx2D, node: TextLayerNode): Rect {
+  const { left, top } = node.bounds;
+  let x = left;
+  let right = left;
+  let baseline = top + node.runs[0]!.fontSize;
+  let descent = 0;
+  ctx.save();
+  for (const run of node.runs) {
+    ctx.font = cssFont(run, run.fontSize);
+    setTracking(ctx, run.tracking, run.fontSize);
+    const segments = run.text.split(/\r\n|\r|\n/);
+    for (let i = 0; i < segments.length; i++) {
+      if (i > 0) {
+        x = left;
+        baseline += run.leadingPt ?? run.fontSize * 1.2;
+      }
+      x += ctx.measureText(segments[i]!).width;
+      right = Math.max(right, x);
+    }
+    descent = Math.max(descent, run.fontSize * 0.25);
+  }
+  ctx.restore();
+  return { left, top, right, bottom: baseline + descent };
 }
 
 // Diverges from server: SceneCompositor ignores tracking; PSD tracking is in 1/1000 em.

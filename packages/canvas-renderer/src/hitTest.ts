@@ -1,4 +1,4 @@
-import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
+import type { Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { clipUnits } from "./buffer.js";
 
 export interface HitTestOptions {
@@ -9,6 +9,8 @@ export interface HitTestOptions {
   alphaAt?: (node: SceneNode, x: number, y: number) => number | undefined;
   /** Minimum alpha that counts as a hit on a raster layer. */
   alphaThreshold?: number;
+  /** Hit area for a leaf layer; defaults to its stored bounds. */
+  boundsOf?: (node: SceneNode) => Rect;
 }
 
 /** Topmost visible leaf layer whose painted pixels cover the scene point (x, y), in PSD pixels. */
@@ -16,11 +18,14 @@ export function hitTest(graph: SceneGraph, x: number, y: number, options: HitTes
   const threshold = options.alphaThreshold ?? 16;
   const pickable = options.isPickable ?? (() => true);
 
+  const boundsOf = options.boundsOf ?? ((node: SceneNode) => node.bounds);
+
   const covers = (node: SceneNode): boolean => {
     if (!options.isVisible(node) || node.type === "adjustment") return false;
-    const { left, top, right, bottom } = node.bounds;
-    if (x < left || x >= right || y < top || y >= bottom) return false;
+    // A group's stored bounds are a union of its children's, so they inherit any child's stale bounds; ask the children.
     if (node.type === "group") return node.children.some(covers);
+    const { left, top, right, bottom } = boundsOf(node);
+    if (x < left || x >= right || y < top || y >= bottom) return false;
     const alpha = options.alphaAt?.(node, x, y);
     return alpha === undefined || alpha >= threshold;
   };
