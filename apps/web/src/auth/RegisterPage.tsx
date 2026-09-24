@@ -3,6 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { register, registerPasskey, loginWithPasskey } from "../lib/auth-api";
 import { useAuth } from "../lib/auth-context";
 import { ApiError } from "../lib/api";
+import { BrandMark } from "../components/workspace";
 
 export function RegisterPage() {
   const [email, setEmail] = useState("");
@@ -35,6 +36,10 @@ export function RegisterPage() {
   return (
     <div className="center-page">
       <div className="card auth-card">
+        <div className="brand">
+          <BrandMark />
+          PSD Template Studio
+        </div>
         <h1>Create your account</h1>
         <p className="subtitle">
           Registration adds a passkey as your credential — no password required. Your device's fingerprint, face, or

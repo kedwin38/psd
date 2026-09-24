@@ -113,7 +113,7 @@ test("golden path: register, publish a template, and export a customized badge",
   await expect(page.getByRole("status", { name: "Save status" })).toHaveText("All changes saved", { timeout: 10_000 });
 
   await page.getByRole("button", { name: /^Export$/ }).click();
-  await expect(page.locator(".field-block", { hasText: "Export" }).locator(".badge")).toHaveText("COMPLETE", { timeout: 20_000 });
+  await expect(page.locator(".export-status .badge")).toHaveText("COMPLETE", { timeout: 20_000 });
 
   const downloadHref = await page.locator("a", { hasText: "Download" }).getAttribute("href");
   expect(downloadHref).toBeTruthy();

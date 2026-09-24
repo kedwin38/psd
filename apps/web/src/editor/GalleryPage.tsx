@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { LayoutTemplate } from "lucide-react";
 import { api } from "../lib/api";
 import type { Category, Project, Template } from "../lib/types";
 
@@ -64,7 +65,8 @@ export function GalleryPage() {
         <div className="template-grid">
           {templates.map((t) => (
             <div className="template-card" key={t.id} onClick={() => startProject(t)}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", aspectRatio: "4/3", background: "var(--surface-2)", color: "var(--text-dim)", fontSize: 13 }}>
+              <div className="thumb">
+                {creatingFor === t.id ? <span className="spinner lg" aria-hidden="true" /> : <LayoutTemplate size={28} strokeWidth={1.6} aria-hidden="true" />}
                 {creatingFor === t.id ? "Creating…" : categories.find((c) => c.id === t.categoryId)?.name ?? "Template"}
               </div>
               <div className="body">

@@ -14,7 +14,12 @@ import type { RoleName } from "./lib/types";
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: RoleName[] }) {
   const { user, loading } = useAuth();
-  if (loading) return <div className="center-page">Loading…</div>;
+  if (loading)
+    return (
+      <div className="center-page" style={{ color: "var(--text-dim)" }}>
+        <span className="spinner lg" role="status" aria-label="Loading" />
+      </div>
+    );
   if (!user) return <Navigate to="/login" replace />;
   if (roles && !roles.some((r) => user.roles.includes(r))) return <Navigate to="/" replace />;
   return <>{children}</>;

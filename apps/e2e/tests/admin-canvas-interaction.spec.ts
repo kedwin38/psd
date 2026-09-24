@@ -120,7 +120,7 @@ test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/r
     await expect.poll(() => pixelAt(page, 120, 120)).toEqual([0, 255, 0, 255]);
     await expect(page.locator(".error-box")).toHaveCount(0);
     await expect(notice(page)).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Undo" })).toHaveAttribute("title", /replace image in “Photo”/);
+    await expect(page.getByRole("button", { name: "Undo" })).toHaveAttribute("data-tip", /replace image in “Photo”/);
 
     await undoKey(page);
     await expect.poll(() => pixelAt(page, 120, 120)).toEqual(gray);
@@ -149,7 +149,7 @@ test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/r
     const labelInput = page.locator("form input").nth(0);
     await labelInput.fill("Attendee name");
     await page.getByRole("button", { name: "Update field" }).click();
-    await expect(page.getByRole("button", { name: "Undo" })).toHaveAttribute("title", /edit field “Attendee name”/);
+    await expect(page.getByRole("button", { name: "Undo" })).toHaveAttribute("data-tip", /edit field “Attendee name”/);
     await page.getByRole("button", { name: "Undo" }).click();
     await expect(labelInput).toHaveValue("Full Name");
     await page.getByRole("button", { name: "Redo" }).click();

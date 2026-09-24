@@ -3,6 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { loginWithPasskey, passwordLoginStart, passwordLoginVerifyTotp } from "../lib/auth-api";
 import { useAuth } from "../lib/auth-context";
 import { ApiError } from "../lib/api";
+import { BrandMark } from "../components/workspace";
 
 export function LoginPage() {
   const [email, setEmail] = useState("");
@@ -63,6 +64,10 @@ export function LoginPage() {
   return (
     <div className="center-page">
       <div className="card auth-card">
+        <div className="brand">
+          <BrandMark />
+          PSD Template Studio
+        </div>
         <h1>Sign in</h1>
         <p className="subtitle">Passkeys are the primary, phishing-resistant way in — no password to steal.</p>
         {error && <div className="error-box">{error}</div>}

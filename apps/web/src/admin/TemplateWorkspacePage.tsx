@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
+import { AlertCircle, AlertTriangle, Box, Check, ChevronRight, Eye, FileWarning, Image, MousePointerClick, PanelLeft, PanelRight, Redo2, RefreshCw, Rocket, Type, Undo2, X } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { stepUp } from "../lib/auth-api";
 import { isTypingTarget } from "../lib/keyboard";
@@ -8,11 +9,35 @@ import type { FieldType, Template, TemplateField, TemplateVersion } from "../lib
 import { SceneCanvas, handleZoomKey, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
 import { ancestorIds, findNode, withNodeUpdate } from "../canvas/sceneTree";
 import { useLayerImages } from "../canvas/useLayerImages";
+import { EmptyState, MOD, PanelResizer, Popover, ShortcutsButton, Spinner, WorkspaceSkeleton, WorkspaceTopBar, usePanel, type Shortcut } from "../components/workspace";
 import { LayerTree, TYPE_LABEL } from "./LayerTree";
-import { FieldMappingForm } from "./FieldMappingForm";
+import { FIELD_TYPE_LABEL, FieldMappingForm } from "./FieldMappingForm";
 import { useCommandStack, type Command } from "./useCommandStack";
 
 const isPickable = (node: SceneNode) => !node.locked;
+
+const INGEST_POLL_MS = 2000;
+const BACK = { to: "/admin/templates", label: "Template library" };
+
+const FIELD_ICON: Record<FieldType, typeof Type> = { TEXT: Type, IMAGE: Image, SMART_OBJECT: Box, VISIBILITY: Eye };
+
+const SHORTCUTS: readonly Shortcut[] = [
+  ["Select a layer", ["Click"]],
+  ["Inspect text runs", ["Double-click"]],
+  ["Zoom", ["Scroll", "+", "−"]],
+  ["Pan", ["Space", "Drag"]],
+  ["Fit to screen", [MOD, "0"]],
+  ["Actual pixels", [MOD, "1"]],
+  ["Undo / Redo", [MOD, "Z"]],
+  ["Redo", ["⇧", MOD, "Z"]],
+  ["Deselect", ["Esc"]],
+  ["Remove selected field", ["Delete"]],
+  ["Replace a placeholder image", ["Drop file"]],
+];
+
+function countNodes(nodes: readonly SceneNode[]): number {
+  return nodes.reduce((n, node) => n + 1 + (node.type === "group" ? countNodes(node.children) : 0), 0);
+}
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.detail ?? (err.errors?.join("; ") || err.title);
@@ -34,9 +59,13 @@ export function TemplateWorkspacePage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [saved, setSaved] = useState(false);
   const canvasRef = useRef<SceneCanvasHandle>(null);
   const commands = useCommandStack((err) => setError(errorMessage(err)));
+  const leftPanel = usePanel("admin-layers", 272, 236);
+  const rightPanel = usePanel("admin-inspector", 320, 280);
 
   const showFields = (next: TemplateField[]) => {
     fieldsRef.current = next;
@@ -55,10 +84,26 @@ export function TemplateWorkspacePage() {
     }
   };
 
+  const tryLoad = () =>
+    load().then(
+      () => setLoadError(null),
+      (err: unknown) => setLoadError(errorMessage(err)),
+    );
+  const tryLoadRef = useRef(tryLoad);
+  tryLoadRef.current = tryLoad;
+
   useEffect(() => {
-    load();
+    void tryLoad();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId, versionId]);
+
+  // The PSD parses in the background: keep checking until it's ready (or has failed).
+  const ingesting = version?.ingestStatus === "PENDING" || version?.ingestStatus === "PARSING";
+  useEffect(() => {
+    if (!ingesting) return;
+    const timer = setInterval(() => void tryLoadRef.current(), INGEST_POLL_MS);
+    return () => clearInterval(timer);
+  }, [ingesting]);
 
   const fetchLayerAsset = useCallback(
     (assetId: string, signal: AbortSignal) => api.blob(`/templates/${templateId}/versions/${versionId}/layer-assets/${encodeURIComponent(assetId)}`, signal),
@@ -74,6 +119,7 @@ export function TemplateWorkspacePage() {
 
   const execute = (cmd: Command) => {
     setError(null);
+    setSaved(true);
     void commands.execute(cmd);
   };
 
@@ -198,14 +244,10 @@ export function TemplateWorkspacePage() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // Saving shows in the top bar; the canvas chip is only about the canvas itself.
+  const layersLoading = layerImages.loaded < layerImages.total;
   const canvasStatus =
-    layerImages.failed > 0
-      ? `${layerImages.failed} layer image(s) failed to load`
-      : layerImages.loaded < layerImages.total
-        ? `Loading layers ${layerImages.loaded}/${layerImages.total}…`
-        : commands.busy
-          ? "Saving…"
-          : null;
+    layerImages.failed > 0 ? `${layerImages.failed} layer image(s) failed to load` : layersLoading ? `Loading layers ${layerImages.loaded}/${layerImages.total}…` : null;
 
   const publish = async () => {
     setError(null);
@@ -221,71 +263,211 @@ export function TemplateWorkspacePage() {
     }
   };
 
-  if (!template || !version) return <p>Loading…</p>;
+  if (!template || !version) {
+    if (!loadError) return <WorkspaceSkeleton label="Opening template" />;
+    return (
+      <StatePage title="Template">
+        <EmptyState
+          icon={<AlertCircle size={22} />}
+          tone="danger"
+          title="This template couldn't be opened"
+          actions={
+            <>
+              <Link className="btn" to={BACK.to}>
+                Back to library
+              </Link>
+              <button className="primary" onClick={() => void tryLoad()}>
+                <RefreshCw size={15} aria-hidden="true" /> Try again
+              </button>
+            </>
+          }
+        >
+          {loadError}
+        </EmptyState>
+      </StatePage>
+    );
+  }
 
   if (version.ingestStatus !== "READY") {
+    const failed = version.ingestStatus === "FAILED";
     return (
-      <div className="card" style={{ maxWidth: 480 }}>
-        <h2>
-          {template.name} — version #{version.versionNo}
-        </h2>
-        <p>
-          Ingestion status: <span className={`badge ${version.ingestStatus}`}>{version.ingestStatus}</span>
-        </p>
-        {version.ingestStatus === "FAILED" && <div className="error-box">{version.ingestError}</div>}
-        {(version.ingestStatus === "PENDING" || version.ingestStatus === "PARSING") && (
-          <p className="hint">Parsing the PSD in the background — this page will update automatically.</p>
-        )}
-        <button onClick={load}>Refresh</button>
-      </div>
+      <StatePage title={template.name} meta={<span className="ws-chip">v{version.versionNo}</span>}>
+        <EmptyState
+          icon={failed ? <FileWarning size={22} /> : <Spinner size="lg" />}
+          tone={failed ? "danger" : undefined}
+          title={failed ? "This PSD couldn't be processed" : "Preparing your PSD"}
+          actions={
+            <>
+              {failed && (
+                <Link className="btn" to={BACK.to}>
+                  Back to library
+                </Link>
+              )}
+              <button className={failed ? "primary" : undefined} onClick={() => void tryLoad()}>
+                <RefreshCw size={15} aria-hidden="true" /> Refresh
+              </button>
+            </>
+          }
+        >
+          {failed
+            ? "Upload a corrected file as a new version from the template library."
+            : "Reading every layer, font and smart object. The workspace opens by itself as soon as it's ready."}
+        </EmptyState>
+        <ol className="ingest-steps" aria-label="Ingestion progress">
+          <li className="done">
+            <span className="dot">
+              <Check size={13} strokeWidth={3} aria-hidden="true" />
+            </span>
+            PSD uploaded
+          </li>
+          <li className={failed ? "failed" : "active"}>
+            <span className="dot">{failed ? <X size={13} strokeWidth={3} aria-hidden="true" /> : <Spinner />}</span>
+            Parsing layers <span className={`badge ${version.ingestStatus}`}>{version.ingestStatus}</span>
+          </li>
+          <li>
+            <span className="dot">
+              <MousePointerClick size={12} aria-hidden="true" />
+            </span>
+            Map editable fields
+          </li>
+        </ol>
+        {failed ? <div className="error-box">{version.ingestError ?? "Ingestion failed."}</div> : <div className="progress-bar" aria-hidden="true" />}
+      </StatePage>
     );
   }
 
   const saving = publishing || commands.busy;
+  const warnings = version.ingestWarnings ?? [];
+  const sortedFields = [...fields].sort((a, b) => a.order - b.order);
+  const bodyStyle = { "--left-w": `${leftPanel.collapsed ? 0 : leftPanel.width}px`, "--right-w": `${rightPanel.collapsed ? 0 : rightPanel.width}px` } as CSSProperties;
 
   return (
-    <div className="workspace-page">
-      <div className="row between" style={{ marginBottom: 16 }}>
-        <div>
-          <h1>
-            {template.name} <span className="hint">v{version.versionNo}</span>
-          </h1>
-          {version.ingestWarnings && version.ingestWarnings.length > 0 && (
-            <p className="hint">{version.ingestWarnings.length} ingestion warning(s) — fidelity notes, not errors.</p>
-          )}
-        </div>
-        <div className="row">
-          <button onClick={() => void commands.undo()} disabled={!commands.undoLabel || commands.busy} title={commands.undoLabel ? `Undo ${commands.undoLabel} (Ctrl/⌘+Z)` : "Nothing to undo"}>
-            Undo
-          </button>
-          <button onClick={() => void commands.redo()} disabled={!commands.redoLabel || commands.busy} title={commands.redoLabel ? `Redo ${commands.redoLabel} (Ctrl/⌘+Shift+Z)` : "Nothing to redo"}>
-            Redo
-          </button>
-          <button className="primary" onClick={publish} disabled={saving || fields.length === 0}>
-            Publish this version
-          </button>
-        </div>
-      </div>
-      {error && <div className="error-box">{error}</div>}
+    <div className="ws workspace-page">
+      <WorkspaceTopBar
+        back={BACK}
+        title={template.name}
+        meta={
+          <>
+            <span className="ws-chip" title={`Template version ${version.versionNo}`}>
+              v{version.versionNo}
+            </span>
+            <span className={`badge ${template.status} hide-sm`}>{template.status === "PUBLISHED" ? "Published" : template.status === "DRAFT" ? "Draft" : template.status}</span>
+            {warnings.length > 0 && (
+              <Popover
+                align="start"
+                trigger={(props) => (
+                  <button type="button" className="ws-chip warn hide-sm" {...props} aria-label={`${warnings.length} ingestion warnings`}>
+                    <AlertTriangle size={12} aria-hidden="true" />
+                    {warnings.length}
+                    <span className="hide-md">{warnings.length === 1 ? " warning" : " warnings"}</span>
+                  </button>
+                )}
+              >
+                <p className="popover-title">
+                  <AlertTriangle size={14} color="var(--warning-500)" aria-hidden="true" /> Ingestion notes
+                </p>
+                <p className="hint">Fidelity notes from parsing this PSD, not errors.</p>
+                <ul className="warning-list">
+                  {warnings.map((w, i) => (
+                    <li key={i}>
+                      <span className="path">{w.path}</span>
+                      {w.message}
+                    </li>
+                  ))}
+                </ul>
+              </Popover>
+            )}
+          </>
+        }
+        center={
+          <div className="ws-toolgroup" role="toolbar" aria-label="History">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Undo"
+              onClick={() => void commands.undo()}
+              disabled={!commands.undoLabel || commands.busy}
+              data-tip={commands.undoLabel ? `Undo ${commands.undoLabel}  ${MOD}Z` : "Nothing to undo"}
+            >
+              <Undo2 size={18} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Redo"
+              onClick={() => void commands.redo()}
+              disabled={!commands.redoLabel || commands.busy}
+              data-tip={commands.redoLabel ? `Redo ${commands.redoLabel}  ⇧${MOD}Z` : "Nothing to redo"}
+            >
+              <Redo2 size={18} aria-hidden="true" />
+            </button>
+          </div>
+        }
+        end={
+          <>
+            {(commands.busy || saved) && (
+              <span className={`save-pill hide-md ${commands.busy ? "saving" : "saved"}`} role="status" aria-label="Workspace save status">
+                {commands.busy ? <Spinner /> : <Check size={14} strokeWidth={2.5} aria-hidden="true" />}
+                {commands.busy ? "Saving…" : "Saved"}
+              </span>
+            )}
+            <button type="button" className="icon-btn panel-toggle" aria-pressed={!leftPanel.collapsed} aria-label="Layers panel" data-tip={leftPanel.collapsed ? "Show layers" : "Hide layers"} onClick={leftPanel.toggle}>
+              <PanelLeft size={18} aria-hidden="true" />
+            </button>
+            <button type="button" className="icon-btn panel-toggle" aria-pressed={!rightPanel.collapsed} aria-label="Fields panel" data-tip={rightPanel.collapsed ? "Show fields" : "Hide fields"} onClick={rightPanel.toggle}>
+              <PanelRight size={18} aria-hidden="true" />
+            </button>
+            <ShortcutsButton shortcuts={SHORTCUTS} />
+            <span className="ws-divider" aria-hidden="true" />
+            <button
+              className="primary"
+              onClick={publish}
+              disabled={saving || fields.length === 0}
+              aria-label="Publish this version"
+              data-tip={fields.length === 0 ? "Map at least one field first" : "Make this version available to end users"}
+              data-tip-align="end"
+            >
+              {publishing ? <Spinner /> : <Rocket size={15} aria-hidden="true" />}
+              Publish
+            </button>
+          </>
+        }
+      />
 
-      <div className="mapping-layout">
-        <div className="mapping-pane">
-          <h3>Layers</h3>
-          {sceneGraph && (
-            <LayerTree
-              nodes={sceneGraph.root}
-              selectedId={selectedNodeId}
-              mappedNodeIds={mappedNodeIds}
-              onSelect={(n) => setSelectedNodeId(n.id)}
-              isVisible={isVisible}
-              onToggleVisible={toggleVisible}
-              onToggleLocked={toggleLocked}
-              images={layerImages.store}
-            />
-          )}
-        </div>
+      <div className={`ws-body mapping-layout${leftPanel.collapsed ? " left-collapsed" : ""}${rightPanel.collapsed ? " right-collapsed" : ""}`} style={bodyStyle}>
+        <aside className="panel left mapping-pane" aria-label="Layers panel">
+          <div className="panel-inner" inert={leftPanel.collapsed}>
+            <div className="panel-header">
+              <h3 className="panel-title">
+                Layers {sceneGraph && <span className="panel-count">{countNodes(sceneGraph.root)}</span>}
+              </h3>
+            </div>
+            {sceneGraph && (
+              <LayerTree
+                nodes={sceneGraph.root}
+                selectedId={selectedNodeId}
+                mappedNodeIds={mappedNodeIds}
+                onSelect={(n) => setSelectedNodeId(n.id)}
+                isVisible={isVisible}
+                onToggleVisible={toggleVisible}
+                onToggleLocked={toggleLocked}
+                images={layerImages.store}
+              />
+            )}
+          </div>
+          <PanelResizer side="left" width={leftPanel.width} min={200} max={420} onResize={leftPanel.setWidth} onReset={leftPanel.reset} label="Resize layers panel" />
+        </aside>
 
-        <div className="workspace-canvas-pane">
+        <main className="ws-canvas workspace-canvas-pane">
+          {error && (
+            <div className="error-box ws-canvas-banner" role="alert">
+              <AlertCircle size={16} aria-hidden="true" />
+              <span>{error}</span>
+              <button type="button" className="icon-btn sm dismiss" aria-label="Dismiss" onClick={() => setError(null)}>
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {sceneGraph && (
             <SceneCanvas
               ref={canvasRef}
@@ -297,44 +479,83 @@ export function TemplateWorkspacePage() {
               onSelect={(n) => setSelectedNodeId(n.id)}
               isPickable={isPickable}
               status={canvasStatus}
+              statusTone={layerImages.failed > 0 ? "error" : "busy"}
+              loading={layersLoading}
               imageDrop={imageDrop}
+              artboardLabel={template.name}
             />
           )}
-        </div>
+        </main>
 
-        <div className="mapping-pane">
-          {selectedNode ? (
-            <FieldMappingForm
-              key={`${selectedNode.id}:${fieldsRevision}`}
-              node={selectedNode}
-              existingField={existingField}
-              onSave={saveField}
-              onDelete={() => existingField && removeField(existingField)}
-              saving={saving}
-            />
-          ) : (
-            <>
-              <h3>Mapped fields ({fields.length})</h3>
-              <p className="hint">Click a layer on the left or on the canvas to tag it as an editable field.</p>
-              <div className="stack">
-                {fields.map((f) => (
-                  <div key={f.id} className="row between" style={{ fontSize: 13 }}>
-                    <span>
-                      {f.label} <span className="hint">({f.fieldType})</span>
-                    </span>
-                    <button className="link" onClick={() => setSelectedNodeId(f.nodeId)}>
-                      Edit
-                    </button>
-                  </div>
-                ))}
+        <aside className="panel right mapping-pane" aria-label="Fields panel">
+          <div className="panel-inner" inert={rightPanel.collapsed}>
+            {selectedNode ? (
+              <div className="panel-body">
+                <FieldMappingForm
+                  key={`${selectedNode.id}:${fieldsRevision}`}
+                  node={selectedNode}
+                  existingField={existingField}
+                  onSave={saveField}
+                  onDelete={() => existingField && removeField(existingField)}
+                  onClose={() => setSelectedNodeId(null)}
+                  saving={saving}
+                />
               </div>
-              <p className="hint" style={{ marginTop: 16 }}>
-                Canvas: scroll or pinch to zoom, Space+drag to pan, double-click text to inspect its runs, drop an image onto an image layer to
-                replace it. Ctrl/⌘+Z undoes, Esc deselects, Delete removes the selected layer's field.
-              </p>
-            </>
-          )}
-        </div>
+            ) : (
+              <>
+                <div className="panel-header">
+                  <h3 className="panel-title">
+                    Mapped fields <span className="panel-count">{fields.length}</span>
+                  </h3>
+                </div>
+                <div className="panel-body">
+                  {sortedFields.length === 0 ? (
+                    <EmptyState icon={<MousePointerClick size={20} />} title="No fields mapped yet">
+                      Select a layer on the canvas or in the Layers panel to make it editable for end users.
+                    </EmptyState>
+                  ) : (
+                    <ul className="field-list">
+                      {sortedFields.map((f) => {
+                        const Icon = FIELD_ICON[f.fieldType];
+                        return (
+                          <li key={f.id}>
+                            <button type="button" onClick={() => setSelectedNodeId(f.nodeId)} aria-label={`Edit field ${f.label}`}>
+                              <span className="f-icon">
+                                <Icon size={15} aria-hidden="true" />
+                              </span>
+                              <span className="f-text">
+                                <span className="f-label">{f.label}</span>
+                                <span className="f-kind">{FIELD_TYPE_LABEL[f.fieldType]}</span>
+                              </span>
+                              <ChevronRight size={16} className="f-go" aria-hidden="true" />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+                <div className="panel-footer editor-tip">
+                  <MousePointerClick size={14} aria-hidden="true" />
+                  <span>Click any layer to map it. Double-click text to inspect its runs; drop an image on a pixel or smart object layer to replace it.</span>
+                </div>
+              </>
+            )}
+          </div>
+          <PanelResizer side="right" width={rightPanel.width} min={248} max={460} onResize={rightPanel.setWidth} onReset={rightPanel.reset} label="Resize fields panel" />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+/** A workspace frame (top bar + dark canvas surround) holding one centered card: ingest progress, load failures. */
+function StatePage({ title, meta, children }: { title: string; meta?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="ws">
+      <WorkspaceTopBar back={BACK} title={title} meta={meta} />
+      <div className="ws-state">
+        <div className="ws-state-card">{children}</div>
       </div>
     </div>
   );

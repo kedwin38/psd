@@ -14,11 +14,17 @@ import {
   type TextRunBox,
 } from "@psd-studio/canvas-renderer";
 import type { FieldOverride, Rect, SceneGraph, SceneNode, TextLayerNode } from "@psd-studio/scene-graph";
+import { AlertTriangle, CheckCircle2, Maximize, Minus, Plus, TextCursorInput, XCircle } from "lucide-react";
 import { isTypingTarget } from "../lib/keyboard";
 import { findNode } from "./sceneTree";
 import { fitRect, toScene, zoomAround, type View } from "./viewport";
 
-const PADDING = 24;
+/** Breathing room around the artboard when fitted, as in any design tool (and room for the artboard label). */
+const PADDING = 48;
+/** Selection/hover strokes use the app accent. */
+const ACCENT = "#4a66ff";
+const ACCENT_SOFT = "rgba(74, 102, 255, 0.6)";
+const MOD_LABEL = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
 const FOCUS_PADDING = 64;
 /** Double-clicking a short word shouldn't zoom so far in that its surroundings vanish. */
 const FOCUS_MAX_ZOOM = 8;
@@ -71,6 +77,9 @@ export function SceneCanvas({
   onActivate,
   nodeLabel = (node) => node.name,
   renderOverlay,
+  loading = false,
+  statusTone = "busy",
+  artboardLabel,
   ref,
 }: {
   graph: SceneGraph;
@@ -89,6 +98,11 @@ export function SceneCanvas({
   nodeLabel?: (node: SceneNode) => string;
   /** DOM layered over the canvas (editors, handles), positioned with the current view. */
   renderOverlay?: (view: View) => ReactNode;
+  /** Layer rasters are still arriving: the artboard shimmers until they have. */
+  loading?: boolean;
+  statusTone?: "busy" | "error";
+  /** Shown above the artboard's top-left corner, like a frame name in a design tool. */
+  artboardLabel?: string;
   ref?: Ref<SceneCanvasHandle>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -199,10 +213,10 @@ export function SceneCanvas({
       for (const b of runBoxes) {
         const r = toPx(b.rect);
         if (b.run === focus?.run) {
-          ctx.fillStyle = "rgba(79, 140, 255, 0.28)";
+          ctx.fillStyle = "rgba(74, 102, 255, 0.28)";
           ctx.fillRect(r.left, r.top, r.right - r.left, r.bottom - r.top);
         }
-        stroke(ctx, r, dpr, b.run === focus?.run ? "#4f8cff" : "rgba(79, 140, 255, 0.6)");
+        stroke(ctx, r, dpr, b.run === focus?.run ? ACCENT : ACCENT_SOFT);
       }
       outline(ctx, ink, dpr, true);
     } else {
@@ -431,7 +445,15 @@ export function SceneCanvas({
       }}
       onDrop={onDrop}
     >
-      <div className="scene-canvas-stage checkerboard" style={{ left: v.x, top: v.y, width: graph.width * v.zoom, height: graph.height * v.zoom }} />
+      <div className={`scene-canvas-stage checkerboard${loading ? " loading" : ""}`} style={{ left: v.x, top: v.y, width: graph.width * v.zoom, height: graph.height * v.zoom }} />
+      {artboardLabel && ready && v.y > 26 && (
+        <div className="scene-artboard-label" style={{ left: Math.max(4, v.x), top: v.y - 22 }} aria-hidden="true">
+          <span className="name">{artboardLabel}</span>
+          <span className="dims">
+            {graph.width} × {graph.height}
+          </span>
+        </div>
+      )}
       <canvas ref={canvasRef} className="scene-canvas-layer" width={pixelWidth} height={pixelHeight} role="img" aria-label="Template canvas" />
       <canvas
         ref={overlayRef}
@@ -452,26 +474,44 @@ export function SceneCanvas({
         onDoubleClick={(e) => (onActivate ? activate(local(e)) : focusText(local(e)))}
       />
       {ready && renderOverlay?.(v)}
-      {hover && !focused && !drag && <div className="scene-canvas-chip hover">{nodeLabel(hover)}</div>}
+      {hover && !focused && !drag && (
+        <div className="scene-canvas-chip hover">
+          <span className="chip-dot" aria-hidden="true" />
+          {nodeLabel(hover)}
+        </div>
+      )}
       {focused && (
         <div className="scene-canvas-chip focus" role="status" aria-label="Text layer focus">
+          <TextCursorInput size={14} aria-hidden="true" />
           {focusLabel(focused, focus?.run ?? null)}
         </div>
       )}
-      {(dragMessage ?? notice) && <div className={`scene-canvas-chip notice${drag && !drag.reason ? " ok" : ""}`}>{dragMessage ?? notice}</div>}
-      {status && <div className="scene-canvas-chip status">{status}</div>}
+      {(dragMessage ?? notice) && (
+        <div className={`scene-canvas-chip notice${drag && !drag.reason ? " ok" : ""}`}>
+          {drag && !drag.reason ? <CheckCircle2 size={14} color="#32d583" aria-hidden="true" /> : <XCircle size={14} color="#f97066" aria-hidden="true" />}
+          <span>{dragMessage ?? notice}</span>
+        </div>
+      )}
+      {status && (
+        <div className={`scene-canvas-chip status${statusTone === "error" ? " error" : ""}`}>
+          {statusTone === "error" ? <AlertTriangle size={14} aria-hidden="true" /> : <span className="spinner" aria-hidden="true" />}
+          {status}
+        </div>
+      )}
       <div className="scene-canvas-toolbar" role="toolbar" aria-label="Zoom">
-        <button type="button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomBy(1 / ZOOM_STEP)}>
-          −
+        <button type="button" className="icon" aria-label="Zoom out" data-tip="Zoom out  −" data-tip-pos="top" onClick={() => zoomBy(1 / ZOOM_STEP)}>
+          <Minus size={15} aria-hidden="true" />
         </button>
         <output aria-label="Zoom level">{Math.round(v.zoom * 100)}%</output>
-        <button type="button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomBy(ZOOM_STEP)}>
-          +
+        <button type="button" className="icon" aria-label="Zoom in" data-tip="Zoom in  +" data-tip-pos="top" onClick={() => zoomBy(ZOOM_STEP)}>
+          <Plus size={15} aria-hidden="true" />
         </button>
-        <button type="button" title="Fit to screen (Ctrl/⌘+0)" onClick={() => setView(null)}>
+        <span className="sep" aria-hidden="true" />
+        <button type="button" data-tip={`Fit to screen  ${MOD_LABEL}0`} data-tip-pos="top" onClick={() => setView(null)}>
+          <Maximize size={13} aria-hidden="true" />
           Fit
         </button>
-        <button type="button" title="Actual pixels (Ctrl/⌘+1)" onClick={() => zoomBy(1 / v.zoom)}>
+        <button type="button" data-tip={`Actual pixels  ${MOD_LABEL}1`} data-tip-pos="top" data-tip-align="end" onClick={() => zoomBy(1 / v.zoom)}>
           100%
         </button>
       </div>
@@ -525,7 +565,8 @@ function stroke(ctx: CanvasRenderingContext2D, r: Rect, lineWidth: number, color
 }
 
 function outline(ctx: CanvasRenderingContext2D, r: Rect, cssPx: number, selected: boolean): void {
-  if (!selected) return stroke(ctx, r, cssPx, "rgba(79, 140, 255, 0.65)");
-  stroke(ctx, r, cssPx * 1.5, "rgba(255, 255, 255, 0.9)");
-  stroke(ctx, r, cssPx * 1.5, "#4f8cff", [5 / 1.5, 4 / 1.5]);
+  if (!selected) return stroke(ctx, r, cssPx, ACCENT_SOFT);
+  // A solid accent frame over a white keyline reads on both light and dark artwork.
+  stroke(ctx, r, cssPx * 3, "rgba(255, 255, 255, 0.85)");
+  stroke(ctx, r, cssPx * 1.5, ACCENT);
 }

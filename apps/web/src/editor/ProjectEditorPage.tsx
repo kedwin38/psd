@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
-import { coverCrop, createDomBuffer, uploadImageRequests } from "@psd-studio/canvas-renderer";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import { Link, useParams } from "react-router-dom";
+import { coverCrop, createDomBuffer, rasterAssetId, uploadImageRequests } from "@psd-studio/canvas-renderer";
 import { referencedAssetIds, toFieldOverrides, type CropRect, type SceneGraph, type SceneNode } from "@psd-studio/scene-graph";
+import { AlertCircle, AlertTriangle, CheckCircle2, CloudCheck, Download, Eye, EyeOff, ImageIcon, ImageUp, Info, Move, PanelLeft, PenLine, Type, X, XCircle } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { isTypingTarget } from "../lib/keyboard";
 import type { ExportJob, Project, TemplateField } from "../lib/types";
 import { SceneCanvas, handleZoomKey, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
 import { findNode } from "../canvas/sceneTree";
 import { MAX_DECODE_DIMENSION, useLayerImages } from "../canvas/useLayerImages";
+import { BitmapThumb } from "../canvas/BitmapThumb";
 import type { View } from "../canvas/viewport";
+import { EmptyState, MOD, PanelResizer, Popover, ShortcutsButton, Spinner, WorkspaceSkeleton, WorkspaceTopBar, usePanel, type Shortcut } from "../components/workspace";
 import { CropOverlay } from "./CropOverlay";
 import { TextEditOverlay } from "./TextEditOverlay";
 import { FIELD_KIND, authoredText, checkImageFile, checkText, exportNotes, imageRules, isImageField, mimeList, textRules, upscaleFactor, type FieldValue } from "./fields";
@@ -18,6 +21,21 @@ import { useFieldValues } from "./useFieldValues";
 const SOFT_UPSCALE = 1.5;
 /** End users have no view-only layer toggles: the canvas shows exactly the project's own visibility values. */
 const NO_VIEW_VISIBILITY: ReadonlyMap<string, boolean> = new Map();
+const BACK = { to: "/", label: "Templates" };
+const PHOTO_THUMB = 56;
+
+const SHORTCUTS: readonly Shortcut[] = [
+  ["Select a field", ["Click"]],
+  ["Type in place / reposition a photo", ["Double-click"]],
+  ["Replace a photo", ["Drop image"]],
+  ["Zoom", ["Scroll", "+", "−"]],
+  ["Pan", ["Space", "Drag"]],
+  ["Fit to screen", [MOD, "0"]],
+  ["Actual pixels", [MOD, "1"]],
+  ["Finish editing / deselect", ["Esc"]],
+];
+
+const FORMAT_LABEL: Record<ExportJob["outputFormat"], string> = { PNG: "PNG", JPEG: "JPEG", PDF: "PDF", TIFF: "TIFF" };
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -44,10 +62,13 @@ export function ProjectEditorPage() {
   const [exportFormat, setExportFormat] = useState<ExportJob["outputFormat"]>("PNG");
   const [exportJob, setExportJob] = useState<ExportJob | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const canvasRef = useRef<SceneCanvasHandle>(null);
   const blockRefs = useRef(new Map<string, HTMLDivElement>());
   const fileInputs = useRef(new Map<string, HTMLInputElement>());
   const measure = useMemo(() => createDomBuffer(1, 1), []);
+  const panel = usePanel("editor-fields", 360, 316);
 
   useEffect(() => {
     if (!projectId) return;
@@ -147,12 +168,14 @@ export function ProjectEditorPage() {
     }
   };
 
+  const chooseFile = (field: TemplateField) => fileInputs.current.get(field.id)?.click();
+
   const activate = (field: TemplateField) => {
     select(field.id);
     if (field.fieldType === "TEXT") setEditing({ fieldId: field.id, mode: "text" });
     else if (isImageField(field)) {
       if (values[field.id]?.type === "image") setEditing({ fieldId: field.id, mode: "crop" });
-      else fileInputs.current.get(field.id)?.click();
+      else chooseFile(field);
     } else setShown(field, !isShown(field));
   };
 
@@ -178,6 +201,29 @@ export function ProjectEditorPage() {
     // Same targets as clicks: fixed design layers (e.g. a frame or gradient over a photo) don't block a drop onto the photo beneath.
     passThrough: (node) => !isPickable(node),
   };
+
+  // Dropping a photo straight onto its field card in the panel, as well as onto the canvas.
+  const cardDrop = (field: TemplateField) =>
+    isImageField(field)
+      ? {
+          onDragOver: (e: DragEvent<HTMLDivElement>) => {
+            if (!e.dataTransfer.types.includes("Files")) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            if (dropTarget !== field.id) setDropTarget(field.id);
+          },
+          onDragLeave: (e: DragEvent<HTMLDivElement>) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropTarget(null);
+          },
+          onDrop: (e: DragEvent<HTMLDivElement>) => {
+            if (!e.dataTransfer.types.includes("Files")) return;
+            e.preventDefault();
+            setDropTarget(null);
+            const file = e.dataTransfer.files[0];
+            if (file) void replaceImage(field, file);
+          },
+        }
+      : {};
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -205,10 +251,13 @@ export function ProjectEditorPage() {
       return select(invalid.id, true);
     }
     setExporting(true);
+    setExportJob(null);
+    setExportOpen(true);
     try {
       // Exports render what's saved, so land every pending edit first.
       if (!(await flush())) {
-        setError("Some changes couldn't be saved, so the export wouldn't include them. Fix the fields marked below and try again.");
+        setExportOpen(false);
+        setError("Some changes couldn't be saved, so the export wouldn't include them. Fix the fields marked in the panel and try again.");
         return;
       }
       let job = await api.post<ExportJob>("/exports", { projectId, format: exportFormat, dpiScale: 1 });
@@ -220,18 +269,43 @@ export function ProjectEditorPage() {
       }
       if (job.status === "FAILED") setError(job.error ?? "Export failed.");
     } catch (err) {
+      setExportOpen(false);
       setError(errorMessage(err, "Could not start export."));
     } finally {
       setExporting(false);
     }
   };
 
-  if (!project || !graph) return error ? <div className="error-box">{error}</div> : <p>Loading…</p>;
+  if (!project || !graph) {
+    if (!error) return <WorkspaceSkeleton right={false} label="Opening project" />;
+    return (
+      <div className="ws">
+        <WorkspaceTopBar back={BACK} title="Project" />
+        <div className="ws-state">
+          <div className="ws-state-card">
+            <EmptyState
+              icon={<AlertCircle size={22} />}
+              tone="danger"
+              title="This project couldn't be opened"
+              actions={
+                <Link className="btn primary" to={BACK.to}>
+                  Back to templates
+                </Link>
+              }
+            >
+              {error}
+            </EmptyState>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
+  const layersLoading = layerImages.loaded < layerImages.total;
   const canvasStatus =
     layerImages.failed > 0
       ? `${layerImages.failed} image(s) failed to load`
-      : layerImages.loaded < layerImages.total
+      : layersLoading
         ? `Loading layers ${layerImages.loaded}/${layerImages.total}…`
         : uploading.size > 0
           ? "Uploading photo…"
@@ -262,7 +336,7 @@ export function ProjectEditorPage() {
                 setShown(field, !shown);
               }}
             >
-              <EyeIcon open={shown} /> {field.label}
+              {shown ? <Eye size={14} aria-hidden="true" /> : <EyeOff size={14} aria-hidden="true" />} {field.label}
             </button>
           );
         })}
@@ -311,131 +385,216 @@ export function ProjectEditorPage() {
     return { message: saveState === "saving" ? "Saving…" : "Saved", tone: "ok" };
   }
 
+  const saveTone = invalid ? "error" : saveState;
+  const bodyStyle = { "--left-w": `${panel.collapsed ? 0 : panel.width}px` } as CSSProperties;
+
   return (
-    <div className="editor-layout">
-      <div className="editor-fields">
-        <h1>{project.name}</h1>
-        <p className={`save-state ${invalid ? "error" : saveState}`} role="status" aria-label="Save status">
-          {invalid ? `“${invalid.label}” isn't saved until it's fixed` : SAVE_LABEL[saveState]}
-        </p>
-        {error && <div className="error-box">{error}</div>}
-        {fields.map((field) => {
-          const node = nodes.get(field.id);
-          const value = values[field.id];
-          const notes = node ? exportNotes(measure, graph, node, value) : [];
-          const problem = uploadErrors[field.id] ?? saveErrors[field.id];
-          return (
-            <div
-              key={field.id}
-              ref={(el) => {
-                if (el) blockRefs.current.set(field.id, el);
-                else blockRefs.current.delete(field.id);
-              }}
-              className={`field-block${field.id === selectedId ? " selected" : ""}`}
-              tabIndex={-1}
-              role="group"
-              aria-label={field.label}
-              onFocus={() => setSelectedId(field.id)}
-            >
-              <label htmlFor={`field-${field.id}`}>{field.label}</label>
-              {field.fieldType === "TEXT" && <TextFieldControls field={field} text={currentText(field)} check={textCheck(field)} onChange={(text) => editText(field, text)} onEditOnCanvas={() => activate(field)} />}
-              {isImageField(field) && (
-                <div className="stack">
-                  <input
-                    id={`field-${field.id}`}
-                    ref={(el) => {
-                      if (el) fileInputs.current.set(field.id, el);
-                      else fileInputs.current.delete(field.id);
-                    }}
-                    type="file"
-                    accept={imageRules(field).allowedMimeTypes.join(",")}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = "";
-                      if (file) void replaceImage(field, file);
-                    }}
-                  />
-                  {value?.type === "image" && node && <ImageSummary name={fileNames[field.id]} natural={layerImages.store?.naturalSize(value.imageAssetId)} node={node} crop={value.crop} onReposition={() => activate(field)} />}
-                  {uploading.has(field.id) && <p className="hint">Uploading…</p>}
-                  <p className="hint">
-                    Drop a photo onto it on the canvas or choose a file: at least {imageRules(field).minWidthPx}×{imageRules(field).minHeightPx}px, {mimeList(imageRules(field).allowedMimeTypes)}.
-                  </p>
-                </div>
-              )}
-              {field.fieldType === "VISIBILITY" && (
-                <label className="row">
-                  <input id={`field-${field.id}`} type="checkbox" checked={isShown(field)} onChange={(e) => setShown(field, e.target.checked)} />
-                  Show
-                </label>
-              )}
-              {problem && <p className="field-error">{problem}</p>}
-              {notes.map((note) => (
-                <p key={note} className="export-note">
-                  {note}
-                </p>
-              ))}
-            </div>
-          );
-        })}
-        {fields.length === 0 && <p className="hint">This template has no editable fields.</p>}
-        {fields.length > 0 && (
-          <p className="hint" style={{ padding: "0 14px" }}>
-            On the canvas: click a highlighted element to select it, double-click text to type in place, double-click a photo to reposition it, and drop an
-            image onto a photo to replace it. Scroll or pinch to zoom, Space+drag to pan.
+    <div className="ws editor-ws">
+      <WorkspaceTopBar
+        back={BACK}
+        title={project.name}
+        meta={
+          <p className={`save-pill save-state ${saveTone}`} role="status" aria-label="Save status">
+            {saveTone === "saving" ? <Spinner /> : saveTone === "error" ? <AlertCircle size={14} aria-hidden="true" /> : <CloudCheck size={15} aria-hidden="true" />}
+            <span className={saveTone === "saved" ? "hide-sm" : undefined}>{invalid ? `“${invalid.label}” isn't saved until it's fixed` : SAVE_LABEL[saveState]}</span>
           </p>
-        )}
-
-        <div className="field-block">
-          <h3>Export</h3>
-          <div className="row">
-            <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value as ExportJob["outputFormat"])} aria-label="Export format">
-              <option value="PNG">PNG</option>
-              <option value="JPEG">JPEG</option>
-              <option value="PDF">PDF (print-ready)</option>
-              <option value="TIFF">TIFF (archival)</option>
-            </select>
-            <button className="primary" onClick={requestExport} disabled={exporting}>
-              {exporting ? "Rendering…" : "Export"}
+        }
+        end={
+          <>
+            <button type="button" className="icon-btn panel-toggle" aria-pressed={!panel.collapsed} aria-label="Fields panel" data-tip={panel.collapsed ? "Show fields" : "Hide fields"} onClick={panel.toggle}>
+              <PanelLeft size={18} aria-hidden="true" />
             </button>
-          </div>
-          {exportJob && (
-            <p style={{ marginTop: 10 }}>
-              Status: <span className={`badge ${exportJob.status}`}>{exportJob.status}</span>
-              {exportJob.status === "COMPLETE" && exportJob.downloadUrl && (
-                <>
-                  {" "}
-                  — <a href={exportJob.downloadUrl}>Download</a>
-                </>
-              )}
-            </p>
-          )}
-        </div>
-      </div>
+            <ShortcutsButton shortcuts={SHORTCUTS} />
+            <span className="ws-divider" aria-hidden="true" />
+            <div className="export-controls">
+              <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value as ExportJob["outputFormat"])} aria-label="Export format">
+                <option value="PNG">PNG</option>
+                <option value="JPEG">JPEG</option>
+                <option value="PDF">PDF (print-ready)</option>
+                <option value="TIFF">TIFF (archival)</option>
+              </select>
+              <Popover
+                open={exportOpen}
+                onOpenChange={(open) => !exporting && setExportOpen(open)}
+                className="export-status"
+                trigger={({ "aria-expanded": expanded }) => (
+                  <button className="primary" onClick={requestExport} disabled={exporting} aria-expanded={expanded}>
+                    {exporting ? <Spinner /> : <Download size={15} aria-hidden="true" />}
+                    Export
+                  </button>
+                )}
+              >
+                <ExportStatus job={exportJob} format={exportFormat} onClose={() => setExportOpen(false)} />
+              </Popover>
+            </div>
+          </>
+        }
+      />
 
-      <div className="editor-canvas-pane">
-        <SceneCanvas
-          ref={canvasRef}
-          graph={graph}
-          images={layerImages.store}
-          imagesVersion={layerImages.version}
-          visibility={NO_VIEW_VISIBILITY}
-          overrides={overrides}
-          selectedId={selectedField?.nodeId ?? null}
-          onSelect={(node) => {
-            const field = fieldByNode.get(node.id);
-            if (field) select(field.id, true);
-          }}
-          onActivate={(node) => {
-            const field = fieldByNode.get(node.id);
-            if (field) activate(field);
-          }}
-          isPickable={isPickable}
-          nodeLabel={(node) => fieldByNode.get(node.id)?.label ?? node.name}
-          status={canvasStatus}
-          imageDrop={imageDrop}
-          renderOverlay={renderOverlay}
-        />
+      <div className={`ws-body no-right editor-layout${panel.collapsed ? " left-collapsed" : ""}`} style={bodyStyle}>
+        <aside className="panel left editor-fields" aria-label="Fields panel">
+          <div className="panel-inner" inert={panel.collapsed}>
+            <div className="panel-header">
+              <h2 className="panel-title">
+                Your content <span className="panel-count">{fields.length}</span>
+              </h2>
+            </div>
+            <div className="panel-body">
+              {fields.map((field) => {
+                const node = nodes.get(field.id);
+                const value = values[field.id];
+                const notes = node ? exportNotes(measure, graph, node, value) : [];
+                const problem = uploadErrors[field.id] ?? saveErrors[field.id];
+                const Icon = field.fieldType === "TEXT" ? Type : isImageField(field) ? ImageIcon : Eye;
+                return (
+                  <div
+                    key={field.id}
+                    ref={(el) => {
+                      if (el) blockRefs.current.set(field.id, el);
+                      else blockRefs.current.delete(field.id);
+                    }}
+                    className={`field-block${field.id === selectedId ? " selected" : ""}${dropTarget === field.id ? " drop-target" : ""}`}
+                    tabIndex={-1}
+                    role="group"
+                    aria-label={field.label}
+                    onFocus={() => setSelectedId(field.id)}
+                    {...cardDrop(field)}
+                  >
+                    <div className="field-head">
+                      <span className="f-icon">
+                        <Icon size={14} aria-hidden="true" />
+                      </span>
+                      {isImageField(field) ? <span className="field-title">{field.label}</span> : <label htmlFor={`field-${field.id}`}>{field.label}</label>}
+                      <span className="field-kind">{FIELD_KIND[field.fieldType]}</span>
+                    </div>
+                    {field.fieldType === "TEXT" && <TextFieldControls field={field} text={currentText(field)} check={textCheck(field)} onChange={(text) => editText(field, text)} onEditOnCanvas={() => activate(field)} />}
+                    {isImageField(field) && node && (
+                      <PhotoField
+                        field={field}
+                        node={node}
+                        value={value?.type === "image" ? value : undefined}
+                        name={fileNames[field.id]}
+                        images={layerImages.store}
+                        uploading={uploading.has(field.id)}
+                        inputRef={(el) => {
+                          if (el) fileInputs.current.set(field.id, el);
+                          else fileInputs.current.delete(field.id);
+                        }}
+                        onFile={(file) => void replaceImage(field, file)}
+                        onChoose={() => chooseFile(field)}
+                        onReposition={() => activate(field)}
+                      />
+                    )}
+                    {field.fieldType === "VISIBILITY" && (
+                      <label className="switch-row">
+                        <span>
+                          Show on design
+                          <span className="sub">You can also toggle it from its chip on the canvas.</span>
+                        </span>
+                        <input id={`field-${field.id}`} type="checkbox" className="switch" checked={isShown(field)} onChange={(e) => setShown(field, e.target.checked)} />
+                      </label>
+                    )}
+                    {problem && (
+                      <p className="field-error">
+                        <XCircle size={14} aria-hidden="true" />
+                        <span>{problem}</span>
+                      </p>
+                    )}
+                    {notes.map((note) => (
+                      <p key={note} className="export-note">
+                        {note}
+                      </p>
+                    ))}
+                  </div>
+                );
+              })}
+              {fields.length === 0 && (
+                <EmptyState icon={<Info size={20} />} title="Nothing to customize">
+                  This template has no editable fields. You can still export it as-is.
+                </EmptyState>
+              )}
+            </div>
+            {fields.length > 0 && (
+              <div className="panel-footer editor-tip">
+                <Info size={14} aria-hidden="true" />
+                <span>Double-click text on the canvas to type in place, or a photo to reposition it. Drop an image onto a photo to replace it.</span>
+              </div>
+            )}
+          </div>
+          <PanelResizer side="left" width={panel.width} min={280} max={480} onResize={panel.setWidth} onReset={panel.reset} label="Resize fields panel" />
+        </aside>
+
+        <main className="ws-canvas editor-canvas-pane">
+          {error && (
+            <div className="error-box ws-canvas-banner" role="alert">
+              <AlertCircle size={16} aria-hidden="true" />
+              <span>{error}</span>
+              <button type="button" className="icon-btn sm dismiss" aria-label="Dismiss" onClick={() => setError(null)}>
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+          <SceneCanvas
+            ref={canvasRef}
+            graph={graph}
+            images={layerImages.store}
+            imagesVersion={layerImages.version}
+            visibility={NO_VIEW_VISIBILITY}
+            overrides={overrides}
+            selectedId={selectedField?.nodeId ?? null}
+            onSelect={(node) => {
+              const field = fieldByNode.get(node.id);
+              if (field) select(field.id, true);
+            }}
+            onActivate={(node) => {
+              const field = fieldByNode.get(node.id);
+              if (field) activate(field);
+            }}
+            isPickable={isPickable}
+            nodeLabel={(node) => fieldByNode.get(node.id)?.label ?? node.name}
+            status={canvasStatus}
+            statusTone={layerImages.failed > 0 ? "error" : "busy"}
+            loading={layersLoading}
+            imageDrop={imageDrop}
+            renderOverlay={renderOverlay}
+            artboardLabel={project.name}
+          />
+        </main>
       </div>
+    </div>
+  );
+}
+
+function ExportStatus({ job, format, onClose }: { job: ExportJob | null; format: ExportJob["outputFormat"]; onClose: () => void }) {
+  const status = job?.status ?? "QUEUED";
+  const label = FORMAT_LABEL[job?.outputFormat ?? format];
+  const done = status === "COMPLETE";
+  const failed = status === "FAILED";
+  return (
+    <div role="status" aria-label="Export status">
+      <div className="status-row">
+        {done ? <CheckCircle2 size={20} color="var(--success-500)" aria-hidden="true" /> : failed ? <XCircle size={20} color="var(--danger-500)" aria-hidden="true" /> : <Spinner />}
+        <span className="grow">{done ? `Your ${label} is ready` : failed ? "Export failed" : `Rendering ${label}…`}</span>
+        <span className={`badge ${status}`}>{status}</span>
+        {(done || failed) && (
+          <button type="button" className="icon-btn sm" aria-label="Close" onClick={onClose}>
+            <X size={15} aria-hidden="true" />
+          </button>
+        )}
+      </div>
+      <p className="sub">
+        {done
+          ? "Rendered on the server at the template's native resolution."
+          : failed
+            ? (job?.error ?? "Something went wrong while rendering. Try again in a moment.")
+            : "Saving your latest edits and rendering at full quality."}
+      </p>
+      {done && job?.downloadUrl && (
+        <a className="btn primary" href={job.downloadUrl}>
+          <Download size={15} aria-hidden="true" />
+          Download
+        </a>
+      )}
     </div>
   );
 }
@@ -457,60 +616,109 @@ function TextFieldControls({
   return (
     <>
       <textarea id={`field-${field.id}`} rows={2} value={text} maxLength={maxLength ?? undefined} onChange={(e) => onChange(e.target.value)} />
-      <div className="row between hint">
+      <div className="field-meta">
         <span aria-label={`${field.label} length`}>{maxLength === null ? `${text.length} characters` : `${text.length}/${maxLength}`}</span>
-        <button type="button" className="link" onClick={onEditOnCanvas}>
+        <button type="button" className="ghost" onClick={onEditOnCanvas}>
+          <PenLine size={13} aria-hidden="true" />
           Edit on canvas
         </button>
       </div>
-      {check.error && <p className="field-error">{check.error}</p>}
+      {check.error && (
+        <p className="field-error">
+          <XCircle size={14} aria-hidden="true" />
+          <span>{check.error}</span>
+        </p>
+      )}
       {check.warnings.map((w) => (
         <p key={w} className="field-warning">
-          {w}
+          <AlertTriangle size={14} aria-hidden="true" />
+          <span>{w}</span>
         </p>
       ))}
     </>
   );
 }
 
-function ImageSummary({
-  name,
-  natural,
+function PhotoField({
+  field,
   node,
-  crop,
+  value,
+  name,
+  images,
+  uploading,
+  inputRef,
+  onFile,
+  onChoose,
   onReposition,
 }: {
-  name: string | undefined;
-  natural: { width: number; height: number } | undefined;
+  field: TemplateField;
   node: SceneNode;
-  crop: CropRect;
+  value: Extract<FieldValue, { type: "image" }> | undefined;
+  name: string | undefined;
+  images: ReturnType<typeof useLayerImages>["store"];
+  uploading: boolean;
+  inputRef: (el: HTMLInputElement | null) => void;
+  onFile: (file: File) => void;
+  onChoose: () => void;
   onReposition: () => void;
 }) {
-  const factor = natural ? upscaleFactor(node, crop, natural) : 1;
+  const rules = imageRules(field);
+  const placeholderId = rasterAssetId(node);
+  const natural = value ? images?.naturalSize(value.imageAssetId) : undefined;
+  const bitmap = value ? images?.get(value.imageAssetId) : placeholderId ? images?.get(placeholderId) : undefined;
+  const factor = value && natural ? upscaleFactor(node, value.crop, natural) : 1;
   return (
     <>
-      <div className="row between">
-        <span className="hint">
-          {name ?? "Your photo"}
-          {natural && ` · ${natural.width}×${natural.height}px`}
-        </span>
-        <button type="button" onClick={onReposition}>
-          Reposition
-        </button>
+      <div className="photo-field">
+        <div className="photo-thumb checkerboard">
+          <BitmapThumb image={bitmap} width={PHOTO_THUMB} height={PHOTO_THUMB} fit="cover" />
+          {uploading && (
+            <div className="busy">
+              <Spinner label="Uploading photo" />
+            </div>
+          )}
+        </div>
+        <div className="photo-info">
+          <span className="photo-name" title={name}>
+            {value ? `${name ?? "Your photo"}${natural ? ` · ${natural.width}×${natural.height}px` : ""}` : "Template placeholder"}
+          </span>
+          <div className="actions">
+            <button type="button" className="sm" onClick={onChoose} disabled={uploading}>
+              <ImageUp size={14} aria-hidden="true" />
+              {value ? "Replace" : "Upload photo"}
+            </button>
+            {value && (
+              <button type="button" className="sm ghost" onClick={onReposition}>
+                <Move size={14} aria-hidden="true" />
+                Reposition
+              </button>
+            )}
+          </div>
+        </div>
+        <input
+          id={`field-${field.id}`}
+          ref={inputRef}
+          type="file"
+          className="visually-hidden"
+          tabIndex={-1}
+          aria-label={`Choose a photo for ${field.label}`}
+          accept={rules.allowedMimeTypes.join(",")}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onFile(file);
+          }}
+        />
       </div>
+      <p className="photo-rules">
+        At least {rules.minWidthPx}×{rules.minHeightPx}px · {mimeList(rules.allowedMimeTypes)} · or drop one here
+      </p>
       {factor > SOFT_UPSCALE && (
-        <p className="field-warning">The export enlarges this photo {factor.toFixed(1)}× to fill its frame, so it may look soft. Zoom out in Reposition or use a larger photo.</p>
+        <p className="field-warning">
+          <AlertTriangle size={14} aria-hidden="true" />
+          <span>The export enlarges this photo {factor.toFixed(1)}× to fill its frame, so it may look soft. Zoom out in Reposition or use a larger photo.</span>
+        </p>
       )}
     </>
-  );
-}
-
-function EyeIcon({ open }: { open: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8Z" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="8" cy="8" r="2" fill={open ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.3" />
-      {!open && <path d="M2.5 13.5 13.5 2.5" stroke="currentColor" strokeWidth="1.3" />}
-    </svg>
   );
 }

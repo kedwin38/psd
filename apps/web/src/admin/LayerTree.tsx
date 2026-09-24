@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { rasterAssetId, type LayerImageStore } from "@psd-studio/canvas-renderer";
 import type { SceneNode, TextLayerNode } from "@psd-studio/scene-graph";
+import { Box, ChevronRight, Eye, EyeOff, Folder, FolderOpen, Lock, LockOpen, PenLine, Search, SearchX, SlidersHorizontal, Type } from "lucide-react";
 import { ancestorIds, matchingIds } from "../canvas/sceneTree";
+import { BitmapThumb } from "../canvas/BitmapThumb";
+import { EmptyState } from "../components/workspace";
 
 export const TYPE_LABEL: Record<SceneNode["type"], string> = {
   group: "Group",
@@ -12,8 +15,9 @@ export const TYPE_LABEL: Record<SceneNode["type"], string> = {
   adjustment: "Adjustment",
 };
 
-const THUMB_W = 34;
-const THUMB_H = 26;
+const THUMB_W = 30;
+const THUMB_H = 24;
+const INDENT = 12;
 
 interface LayerTreeProps {
   nodes: SceneNode[];
@@ -59,10 +63,19 @@ export function LayerTree(props: LayerTreeProps) {
 
   return (
     <div className="layers-panel">
-      <input type="search" className="layers-search" placeholder="Filter layers by name" aria-label="Filter layers" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div className="layers-toolbar">
+        <div className="search-field">
+          <Search size={14} aria-hidden="true" />
+          <input type="search" className="layers-search" placeholder="Filter layers" aria-label="Filter layers" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+      </div>
       <div ref={listRef} className="layer-tree" role="tree" aria-label="Layers">
         <LayerRows {...props} nodes={nodes} depth={0} ancestorHidden={false} filter={filter} collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
-        {filter?.size === 0 && <p className="hint">No layers match “{query}”.</p>}
+        {filter?.size === 0 && (
+          <EmptyState icon={<SearchX size={20} />} title="No matching layers">
+            Nothing is named “{query}”.
+          </EmptyState>
+        )}
       </div>
     </div>
   );
@@ -85,6 +98,7 @@ function LayerRows(
         const visible = isVisible(node);
         const isGroup = node.type === "group";
         const expanded = isGroup && (filter !== null || !collapsed.has(node.id));
+        const locked = !!node.locked;
         return (
           <div key={node.id} role="none">
             <div
@@ -94,6 +108,7 @@ function LayerRows(
               aria-expanded={isGroup ? expanded : undefined}
               data-node-id={node.id}
               tabIndex={node.id === selectedId ? 0 : -1}
+              title={`${TYPE_LABEL[node.type]} layer`}
               onClick={() => onSelect(node)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
@@ -102,33 +117,22 @@ function LayerRows(
                 }
               }}
             >
-              <button
-                type="button"
-                className="layer-icon-btn"
-                aria-pressed={visible}
-                aria-label={visible ? `Hide ${node.name}` : `Show ${node.name}`}
-                title={visible ? "Hide layer (view only)" : "Show layer (view only)"}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleVisible(node);
-                }}
-              >
-                {visible ? <EyeIcon /> : <span className="icon-placeholder" />}
-              </button>
-              <button
-                type="button"
-                className={`layer-icon-btn${node.locked ? " active" : ""}`}
-                aria-pressed={!!node.locked}
-                aria-label={node.locked ? `Unlock ${node.name}` : `Lock ${node.name}`}
-                title={node.locked ? "Locked: canvas clicks pass through this layer" : "Lock (canvas clicks will pass through)"}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleLocked(node);
-                }}
-              >
-                <LockIcon locked={!!node.locked} />
-              </button>
-              <span className="layer-indent" style={{ width: depth * 14 }} />
+              <span className="layer-eye-col">
+                <button
+                  type="button"
+                  className="layer-icon-btn"
+                  aria-pressed={visible}
+                  aria-label={visible ? `Hide ${node.name}` : `Show ${node.name}`}
+                  title={visible ? "Hide layer (view only)" : "Show layer (view only)"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleVisible(node);
+                  }}
+                >
+                  {visible ? <Eye size={15} aria-hidden="true" /> : <EyeOff size={15} aria-hidden="true" />}
+                </button>
+              </span>
+              <span className="layer-indent" style={{ width: depth * INDENT }} />
               {isGroup ? (
                 <button
                   type="button"
@@ -140,20 +144,35 @@ function LayerRows(
                   }}
                   disabled={filter !== null}
                 >
-                  <svg viewBox="0 0 10 10" width="10" height="10" style={{ transform: expanded ? "rotate(90deg)" : undefined }}>
-                    <path d="M3 1.5 7 5 3 8.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                  </svg>
+                  <ChevronRight size={14} aria-hidden="true" style={{ transform: expanded ? "rotate(90deg)" : undefined }} />
                 </button>
               ) : (
                 <span className="layer-caret" />
               )}
-              <LayerThumb node={node} images={props.images} />
+              <LayerThumb node={node} images={props.images} expanded={expanded} />
               <span className="layer-label">
                 <span className="layer-name">{node.name}</span>
                 {node.type === "text" && <FontBadge node={node} />}
               </span>
-              <span className="type-tag">{TYPE_LABEL[node.type]}</span>
-              {mappedNodeIds.has(node.id) && <span className="badge PUBLISHED">field</span>}
+              {mappedNodeIds.has(node.id) && (
+                <span className="badge field-pill" title="Mapped as an editable field">
+                  <PenLine size={11} strokeWidth={2.4} aria-hidden="true" />
+                  <span className="visually-hidden">Field</span>
+                </span>
+              )}
+              <button
+                type="button"
+                className={`layer-icon-btn layer-lock${locked ? " active" : ""}`}
+                aria-pressed={locked}
+                aria-label={locked ? `Unlock ${node.name}` : `Lock ${node.name}`}
+                title={locked ? "Locked: canvas clicks pass through this layer" : "Lock (canvas clicks will pass through)"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleLocked(node);
+                }}
+              >
+                {locked ? <Lock size={14} aria-hidden="true" /> : <LockOpen size={14} aria-hidden="true" />}
+              </button>
             </div>
             {isGroup && expanded && <LayerRows {...props} nodes={node.children} depth={depth + 1} ancestorHidden={ancestorHidden || !visible} />}
           </div>
@@ -168,54 +187,36 @@ function FontBadge({ node }: { node: TextLayerNode }) {
   const label = fonts.length === 1 ? fonts[0]! : "Mixed fonts";
   return (
     <span className="font-badge" title={`Detected from PSD: ${fonts.join(", ")}`}>
-      <span className="font-badge-caption">PSD font</span> {label}
+      {label}
     </span>
   );
 }
 
-function LayerThumb({ node, images }: { node: SceneNode; images: LayerImageStore | null }) {
-  const ref = useRef<HTMLCanvasElement>(null);
+function LayerThumb({ node, images, expanded }: { node: SceneNode; images: LayerImageStore | null; expanded: boolean }) {
   const assetId = rasterAssetId(node);
   const image = assetId && images ? images.get(assetId) : undefined;
 
-  useEffect(() => {
-    const ctx = ref.current?.getContext("2d");
-    if (!ctx || !image) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = THUMB_W * dpr;
-    const h = THUMB_H * dpr;
-    const k = Math.min(w / image.width, h / image.height);
-    ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(image, (w - image.width * k) / 2, (h - image.height * k) / 2, image.width * k, image.height * k);
-  }, [image]);
-
-  if (node.type === "group") return <span className="layer-thumb icon">{FOLDER_ICON}</span>;
-  if (node.type === "text") return <span className="layer-thumb icon text">T</span>;
-  if (node.type === "adjustment") return <span className="layer-thumb icon">◐</span>;
-  const dpr = window.devicePixelRatio || 1;
-  return <canvas ref={ref} className="layer-thumb checkerboard" width={THUMB_W * dpr} height={THUMB_H * dpr} aria-hidden="true" />;
-}
-
-const FOLDER_ICON = (
-  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-    <path d="M1.5 3.5h4.5l1.5 1.5h7v8h-13z" fill="none" stroke="currentColor" strokeWidth="1.2" />
-  </svg>
-);
-
-function EyeIcon() {
+  if (node.type === "group") return <span className="layer-thumb icon group">{expanded ? <FolderOpen size={16} aria-hidden="true" /> : <Folder size={16} aria-hidden="true" />}</span>;
+  if (node.type === "text")
+    return (
+      <span className="layer-thumb icon">
+        <Type size={14} aria-hidden="true" />
+      </span>
+    );
+  if (node.type === "adjustment")
+    return (
+      <span className="layer-thumb icon">
+        <SlidersHorizontal size={14} aria-hidden="true" />
+      </span>
+    );
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="8" cy="8" r="2" fill="currentColor" />
-    </svg>
-  );
-}
-
-function LockIcon({ locked }: { locked: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <rect x="3" y="7" width="10" height="7" rx="1" fill={locked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.3" />
-      <path d={locked ? "M5 7V5a3 3 0 0 1 6 0v2" : "M5 7V5a3 3 0 0 1 5.8-1"} fill="none" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
+    <span className="layer-thumb-wrap">
+      <BitmapThumb className="layer-thumb checkerboard" image={image} width={THUMB_W} height={THUMB_H} />
+      {node.type === "smartObject" && (
+        <span className="layer-thumb-badge" title="Smart Object">
+          <Box size={9} strokeWidth={2.5} aria-hidden="true" />
+        </span>
+      )}
+    </span>
   );
 }

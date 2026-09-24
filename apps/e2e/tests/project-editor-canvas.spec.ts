@@ -217,7 +217,8 @@ test("end-user editor: live canvas with in-place editing that matches the export
     await expect.poll(() => zoomLevel(page)).toBeGreaterThan(fitZoom * 1.5);
     const after = await scenePoint(page, 70, 280);
     expect(Math.abs(after.x - anchor.x)).toBeLessThan(2);
-    await clickScene(page, 120, 120);
+    // Near the photo's bottom edge, so it's still on screen after zooming in around the name below it.
+    await clickScene(page, 120, 190);
     await expect(block(page, "Photo")).toHaveClass(/selected/);
 
     const beforeKeys = await zoomLevel(page);
@@ -243,7 +244,7 @@ test("end-user editor: live canvas with in-place editing that matches the export
 
   await test.step("the exported PNG has the same pixels the canvas shows for photos, crop and visibility", async () => {
     await page.getByRole("button", { name: /^Export$/ }).click();
-    await expect(page.locator(".field-block", { hasText: "Export" }).locator(".badge")).toHaveText("COMPLETE", { timeout: 30_000 });
+    await expect(page.locator(".export-status .badge")).toHaveText("COMPLETE", { timeout: 30_000 });
     const href = await page.locator("a", { hasText: "Download" }).getAttribute("href");
     const res = await page.request.get(href!);
     expect(res.status()).toBe(200);
