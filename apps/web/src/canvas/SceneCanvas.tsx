@@ -346,6 +346,9 @@ export function SceneCanvas({
   };
 
   const onPointerMove = (e: PointerEvent<HTMLCanvasElement>) => {
+    // A move here proves the pointer is inside, even when React never reported the enter: it skips enters whose
+    // related target was a node that has since unmounted (e.g. the loading skeleton the canvas replaced under a still mouse).
+    pointerInside.current = true;
     const p = local(e);
     if (touches.current.has(e.pointerId)) touches.current.set(e.pointerId, p);
     const g = gesture.current;
