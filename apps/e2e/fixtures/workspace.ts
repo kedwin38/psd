@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type JSHandle, type Page } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -58,6 +58,33 @@ export async function scenePoint(page: Page, x: number, y: number): Promise<{ x:
 export async function clickScene(page: Page, x: number, y: number): Promise<void> {
   const p = await scenePoint(page, x, y);
   await page.mouse.click(p.x, p.y);
+}
+
+/** A DataTransfer holding a PNG of the given size: one color, or left/right halves in two colors. */
+export function pngFile(page: Page, width: number, height: number, color: string, rightColor = color, name = "art.png"): Promise<JSHandle<DataTransfer>> {
+  return page.evaluateHandle(
+    async ([w, h, left, right, fileName]) => {
+      const c = new OffscreenCanvas(w as number, h as number);
+      const ctx = c.getContext("2d")!;
+      ctx.fillStyle = left as string;
+      ctx.fillRect(0, 0, (w as number) / 2, h as number);
+      ctx.fillStyle = right as string;
+      ctx.fillRect((w as number) / 2, 0, (w as number) / 2, h as number);
+      const dt = new DataTransfer();
+      dt.items.add(new File([await c.convertToBlob({ type: "image/png" })], fileName as string, { type: "image/png" }));
+      return dt;
+    },
+    [width, height, color, rightColor, name] as const,
+  );
+}
+
+/** Drags a file over (and optionally drops it onto) the canvas at a scene point. */
+export async function dragOver(page: Page, x: number, y: number, dataTransfer: JSHandle<DataTransfer>, drop = false): Promise<void> {
+  const p = await scenePoint(page, x, y);
+  const target = page.locator(".scene-canvas");
+  await target.dispatchEvent("dragenter", { dataTransfer, clientX: p.x, clientY: p.y });
+  await target.dispatchEvent("dragover", { dataTransfer, clientX: p.x, clientY: p.y });
+  if (drop) await target.dispatchEvent("drop", { dataTransfer, clientX: p.x, clientY: p.y });
 }
 
 /** RGBA of the given canvas (composited scene by default) under a scene point. */

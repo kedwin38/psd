@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { createCanvas } from "@napi-rs/canvas";
 import { buildTestPsdBuffer } from "../fixtures/make-test-psd";
 import { grantRole, resetDatabase } from "../fixtures/grant-role";
+import { pixelAt } from "../fixtures/workspace";
 
 /**
  * Drives the actual product end-to-end through a real browser with a CDP
@@ -104,12 +105,12 @@ test("golden path: register, publish a template, and export a customized badge",
   const photoPath = join(tmpdir(), `psd-studio-e2e-photo-${Date.now()}.png`);
   writeFileSync(photoPath, photoCanvas.toBuffer("image/png"));
   await page.locator('input[type="file"]').first().setInputFiles(photoPath);
-  await page.waitForTimeout(600);
+  // Live preview reflects every edit — spec's central preview/export parity bet: the uploaded photo is on the canvas.
+  await expect(page.getByRole("img", { name: "Template canvas" })).toBeVisible({ timeout: 5_000 });
+  await expect.poll(() => pixelAt(page, 120, 120)).toEqual([34, 170, 85, 255]);
 
   await page.locator('input[type="checkbox"]').first().check();
-
-  // Live preview reflects every edit — spec's central preview/export parity bet.
-  await expect(page.locator(".editor-canvas-pane img")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole("status", { name: "Save status" })).toHaveText("All changes saved", { timeout: 10_000 });
 
   await page.getByRole("button", { name: /^Export$/ }).click();
   await expect(page.locator(".field-block", { hasText: "Export" }).locator(".badge")).toHaveText("COMPLETE", { timeout: 20_000 });

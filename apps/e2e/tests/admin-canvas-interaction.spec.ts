@@ -1,6 +1,6 @@
-import { test, expect, type JSHandle, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { resetDatabase } from "../fixtures/grant-role";
-import { clickScene, openWorkspace, overlay, pixelAt, row, scenePoint, stage } from "../fixtures/workspace";
+import { clickScene, dragOver, openWorkspace, overlay, pixelAt, pngFile, row, scenePoint, stage } from "../fixtures/workspace";
 
 /**
  * Photoshop-style interaction on the admin workspace canvas: zoom/pan, text-run focus,
@@ -16,28 +16,6 @@ const notice = (page: Page) => page.locator(".scene-canvas-chip.notice");
 const undoKey = (page: Page) => page.keyboard.press("ControlOrMeta+z");
 const redoKey = (page: Page) => page.keyboard.press("ControlOrMeta+Shift+z");
 
-function pngFile(page: Page, width: number, height: number, color: string): Promise<JSHandle<DataTransfer>> {
-  return page.evaluateHandle(
-    async ([w, h, css]) => {
-      const c = new OffscreenCanvas(w as number, h as number);
-      const ctx = c.getContext("2d")!;
-      ctx.fillStyle = css as string;
-      ctx.fillRect(0, 0, w as number, h as number);
-      const dt = new DataTransfer();
-      dt.items.add(new File([await c.convertToBlob({ type: "image/png" })], "art.png", { type: "image/png" }));
-      return dt;
-    },
-    [width, height, color] as const,
-  );
-}
-
-async function dragOver(page: Page, x: number, y: number, dataTransfer: JSHandle<DataTransfer>, drop = false) {
-  const p = await scenePoint(page, x, y);
-  const target = page.locator(".scene-canvas");
-  await target.dispatchEvent("dragenter", { dataTransfer, clientX: p.x, clientY: p.y });
-  await target.dispatchEvent("dragover", { dataTransfer, clientX: p.x, clientY: p.y });
-  if (drop) await target.dispatchEvent("drop", { dataTransfer, clientX: p.x, clientY: p.y });
-}
 
 test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/redo", async ({ page, context }) => {
   test.setTimeout(180_000);
