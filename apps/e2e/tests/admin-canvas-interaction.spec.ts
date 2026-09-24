@@ -57,7 +57,7 @@ test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/r
     const panned = (await stage(page).boundingBox())!;
     expect(panned.x - panStart.x).toBeCloseTo(80, 0);
     expect(panned.y - panStart.y).toBeCloseTo(40, 0);
-    await expect(page.locator(".mapping-pane h3").last()).toHaveText(/Mapped fields/);
+    await expect(page.locator(".mapping-pane h3").last()).toHaveText(/Editable fields/);
 
     await page.keyboard.press("ControlOrMeta+1");
     await expect(page.getByLabel("Zoom level")).toHaveText("100%");
@@ -89,7 +89,7 @@ test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/r
     await expect(focus).toHaveCount(0);
     await expect(page.locator(".mapping-pane h3", { hasText: "Full Name" })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.locator(".mapping-pane h3").last()).toHaveText(/Mapped fields/);
+    await expect(page.locator(".mapping-pane h3").last()).toHaveText(/Editable fields/);
   });
 
   await test.step("drag-and-drop replaces a smart object's placeholder image live, and undo/redo re-points it", async () => {

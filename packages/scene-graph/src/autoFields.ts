@@ -81,6 +81,12 @@ function autoFieldFor(node: SceneNode): Pick<AutoField, "fieldType" | "constrain
   }
 }
 
+/** A pixel, shape or smart object layer with no pixels and no frame: there's nothing for a photo to fill. */
+function isBlankRaster(node: SceneNode): boolean {
+  const { left, top, right, bottom } = node.bounds;
+  return (node.type === "pixel" || node.type === "shape" || node.type === "smartObject") && (right <= left || bottom <= top);
+}
+
 /**
  * One field per layer that isn't locked (itself or by a locked group), ordered as the Layers panel lists them: topmost
  * first. A field's order is its layer's position among all layers, so it doesn't shift as other layers lock and unlock.
@@ -92,7 +98,7 @@ export function autoFields(graph: SceneGraph): AutoField[] {
     for (const node of [...nodes].reverse()) {
       const order = position++;
       const isLocked = locked || !!node.locked;
-      if (!isLocked) {
+      if (!isLocked && !isBlankRaster(node)) {
         // A PSD may leave layers unnamed; fields still need a label and path.
         const label = node.name.slice(0, MAX_LABEL_LENGTH) || node.type;
         fields.push({ nodeId: node.id, layerPath: node.path || label, label, order, ...autoFieldFor(node) });

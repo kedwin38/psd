@@ -150,7 +150,7 @@ export function FieldMappingForm({
             {node.path}
           </p>
           <div className="status-line">
-            {existingField ? <span className="badge PUBLISHED">Mapped</span> : <span className="badge">{followsLocks && lockedBy ? "Locked" : "Not mapped"}</span>}
+            {existingField ? <span className="badge PUBLISHED">Editable</span> : <span className="badge">{followsLocks && lockedBy ? "Locked" : "Fixed design"}</span>}
             <span className="badge plain">{TYPE_LABEL[node.type]} layer</span>
           </div>
           {followsLocks && !existingField && lockedBy && (

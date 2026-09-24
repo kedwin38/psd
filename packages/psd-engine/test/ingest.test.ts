@@ -1,13 +1,13 @@
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
 import type { Layer, Psd } from "ag-psd";
 import { buildSceneGraph, type AssetSink } from "../src/ingest.js";
-import { findNodeById, idFromPath } from "@psd-studio/scene-graph";
+import { findNodeById, idFromPath, walkSceneGraph, type SceneNode } from "@psd-studio/scene-graph";
 
 class RecordingSink implements AssetSink {
-  puts: { hint: string; bytes: number }[] = [];
+  puts: { hint: string; bytes: number; png: Buffer }[] = [];
   async putImage(png: Buffer, hint: string): Promise<string> {
-    this.puts.push({ hint, bytes: png.length });
+    this.puts.push({ hint, bytes: png.length, png });
     return `asset_${this.puts.length}`;
   }
 }
@@ -371,5 +371,63 @@ describe("buildSceneGraph", () => {
     const leaf = findNodeById(sceneGraph, idFromPath("Group/Leaf"));
     expect(leaf).toBeDefined();
     expect(leaf!.name).toBe("Leaf");
+  });
+
+  it("keeps an empty layer in the tree, with a transparent raster instead of dropping it", async () => {
+    const psd: Psd = {
+      width: 50,
+      height: 50,
+      children: [{ name: "Base", left: 0, top: 0, right: 50, bottom: 50, canvas: fakeCanvas(50, 50, "#000") } as Layer, { name: "Empty", left: 0, top: 0, right: 0, bottom: 0 } as Layer],
+    };
+    const sink = new RecordingSink();
+    const { sceneGraph, warnings } = await buildSceneGraph(psd, sink);
+    expect(sceneGraph.root.map((n) => [n.name, n.type])).toEqual([
+      ["Base", "pixel"],
+      ["Empty", "pixel"],
+    ]);
+    expect(sceneGraph.root[1]!.bounds).toEqual({ left: 0, top: 0, right: 0, bottom: 0 });
+    const image = await loadImage(sink.puts[1]!.png);
+    expect([image.width, image.height]).toEqual([1, 1]);
+    expect(warnings).toHaveLength(0);
+  });
+
+  it("gives an empty smart object its placed frame and a raster browsers can decode", async () => {
+    const psd: Psd = {
+      width: 400,
+      height: 300,
+      children: [
+        {
+          name: "Logo Slot",
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          placedLayer: { id: "1", type: "raster", transform: [300, 200, 380, 200, 380, 280, 300, 280], width: 80, height: 80 },
+        } as Layer,
+      ],
+    };
+    const sink = new RecordingSink();
+    const { sceneGraph } = await buildSceneGraph(psd, sink);
+    const node = sceneGraph.root[0]!;
+    expect(node.type).toBe("smartObject");
+    expect(node.bounds).toEqual({ left: 300, top: 200, right: 380, bottom: 280 });
+    expect(sink.puts[0]!.bytes).toBeGreaterThan(0);
+    await expect(loadImage(sink.puts[0]!.png)).resolves.toBeDefined();
+  });
+
+  it("gives sibling layers that share a name, and their contents, distinct ids", async () => {
+    const leaf = (name: string) => ({ name, left: 0, top: 0, right: 10, bottom: 10, canvas: fakeCanvas(10, 10, "#000") }) as Layer;
+    const psd: Psd = {
+      width: 50,
+      height: 50,
+      children: [{ name: "Tile", children: [leaf("Photo")] } as Layer, { name: "Tile", children: [leaf("Photo")] } as Layer, leaf("Tile")],
+    };
+    const { sceneGraph } = await buildSceneGraph(psd, new RecordingSink());
+    const ids = [...walkSceneGraph(sceneGraph)].map((n) => n.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(sceneGraph.root.map((n) => n.path)).toEqual(["Tile", "Tile", "Tile"]);
+    // A layer's first occurrence keeps its plain path's id, as templates ingested before have it.
+    expect(sceneGraph.root[0]!.id).toBe(idFromPath("Tile"));
+    expect(findNodeById(sceneGraph, idFromPath("Tile/Photo"))).toBe((sceneGraph.root[0] as Extract<SceneNode, { type: "group" }>).children[0]);
   });
 });

@@ -842,9 +842,14 @@ body.is-resizing .ws-body { transition: none; }
 }
 .layer-icon-btn:hover:not(:disabled) { color: var(--text); background: var(--gray-150); }
 .layer-icon-btn[aria-pressed="false"] { color: var(--text-faint); }
-.layer-lock { width: 22px; opacity: 0; transition: opacity var(--dur-fast); }
-.layer-row:hover .layer-lock, .layer-row:focus-within .layer-lock, .layer-lock.active { opacity: 1; }
+/* Always shown: locking is how an admin marks a layer as not editable. */
+.layer-lock { width: 22px; }
 .layer-lock.active { color: var(--text-2); }
+.layers-hint {
+  flex: none; display: flex; gap: 6px; margin: 0; padding: var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--gray-150); font-size: var(--fs-xs); line-height: 1.45; color: var(--text-dim);
+}
+.layers-hint svg { flex: none; margin-top: 2px; color: var(--accent-600); }
 .layer-caret { width: 16px; height: 20px; color: var(--text-faint); }
 .layer-caret:hover:not(:disabled) { background: none; color: var(--text); }
 .layer-caret:disabled { opacity: 1; cursor: default; }
