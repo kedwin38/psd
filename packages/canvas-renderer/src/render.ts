@@ -250,7 +250,24 @@ export function fieldTextFit(ctx: Ctx2D, node: TextLayerNode, text: string): Fie
   return { lines: lines.length, capacity, overflowsWidth };
 }
 
-type RunSegmentVisitor =(runIndex: number, run: TextRun, x: number, baseline: number, metrics: TextMetrics) => void;
+/** Scene-space extents of replacement text exactly as paintText lays it out (for text layers stored with empty bounds). */
+export function measureFieldTextBounds(ctx: Ctx2D, node: TextLayerNode, text: string): Rect {
+  ctx.save();
+  const widths = wrapFieldText(ctx, node, text, 1).map((line) => ctx.measureText(line).width);
+  ctx.restore();
+  const { left, top, right } = node.bounds;
+  const style = node.runs[0]!;
+  const xs = widths.map((width) => alignedX(node.alignment, left, right, width));
+  const leading = style.leadingPt ?? style.fontSize * 1.2;
+  return {
+    left: Math.min(left, ...xs),
+    top,
+    right: Math.max(left, ...xs.map((x, i) => x + widths[i]!)),
+    bottom: top + style.fontSize + (widths.length - 1) * leading + style.fontSize * 0.25,
+  };
+}
+
+type RunSegmentVisitor = (runIndex: number, run: TextRun, x: number, baseline: number, metrics: TextMetrics) => void;
 
 function layoutRuns(ctx: Ctx2D, node: TextLayerNode, visit: RunSegmentVisitor): void {
   const { left, top } = node.bounds;
@@ -310,10 +327,12 @@ function wrapText(ctx: Ctx2D, text: string, maxWidthPx: number): string[] {
   return lines;
 }
 
+function alignedX(alignment: TextLayerNode["alignment"], left: number, right: number, width: number): number {
+  if (alignment === "center") return left + (right - left - width) / 2;
+  if (alignment === "right") return right - width;
+  return left;
+}
+
 function drawAlignedLine(ctx: Ctx2D, line: string, alignment: TextLayerNode["alignment"], left: number, right: number, y: number): void {
-  const width = ctx.measureText(line).width;
-  let x = left;
-  if (alignment === "center") x = left + (right - left - width) / 2;
-  else if (alignment === "right") x = right - width;
-  ctx.fillText(line, x, y);
+  ctx.fillText(line, alignedX(alignment, left, right, ctx.measureText(line).width), y);
 }

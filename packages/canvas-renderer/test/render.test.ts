@@ -2,7 +2,7 @@ import { GlobalFonts, createCanvas, loadImage, type Image } from "@napi-rs/canva
 import { describe, expect, it } from "vitest";
 import type { FieldOverride, Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
-import { exportDivergences, fieldTextFit, isFontAvailable, measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
+import { exportDivergences, fieldTextFit, isFontAvailable, measureFieldTextBounds, measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
 
 const napiBuffer = (w: number, h: number) => createCanvas(w, h).getContext("2d") as unknown as Ctx2D;
 
@@ -172,6 +172,22 @@ describe("renderScene", () => {
     expect(fieldTextFit(ctx, text, "A considerably longer name that has to wrap onto more lines").lines).toBeGreaterThan(1);
     expect(fieldTextFit(ctx, text, "Supercalifragilisticexpialidocious-and-then-some").overflowsWidth).toBe(true);
     expect(fieldTextFit(ctx, { ...text, bounds: { left: 0, top: 0, right: 200, bottom: 80 } }, "x").capacity).toBe(3);
+  });
+
+  it("measures replacement text where paintText draws it, for layers stored with empty bounds", () => {
+    const text = {
+      ...base("t", { left: 100, top: 20, right: 100, bottom: 20 }),
+      type: "text",
+      alignment: "center",
+      boxMode: "point",
+      runs: [{ text: "Jo", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    } as Extract<SceneNode, { type: "text" }>;
+    const ctx = napiBuffer(1, 1);
+    const short = measureFieldTextBounds(ctx, text, "Jo");
+    const long = measureFieldTextBounds(ctx, text, "Jonathan Livingston");
+    expect(long.right - long.left).toBeGreaterThan((short.right - short.left) * 4);
+    expect((long.left + long.right) / 2).toBeCloseTo(100, 5);
+    expect(long.bottom).toBeCloseTo(20 + 20 + 5);
   });
 
   it("flags text styling the server compositor doesn't apply yet", () => {

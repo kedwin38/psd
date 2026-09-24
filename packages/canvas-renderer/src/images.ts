@@ -62,10 +62,6 @@ export class LayerImageStore {
     return this.natural.get(assetId);
   }
 
-  get loadedCount(): number {
-    return this.bitmaps.size;
-  }
-
   get failedCount(): number {
     return this.failed.size;
   }
