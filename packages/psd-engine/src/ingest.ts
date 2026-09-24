@@ -1,3 +1,4 @@
+import { createCanvas } from "@napi-rs/canvas";
 import { readPsd, type Psd, type Layer, type LayerTextData, type ParagraphStyle, ColorMode as AgColorMode } from "ag-psd";
 import {
   type SceneGraph,
@@ -80,6 +81,23 @@ function unionBounds(rects: Rect[]): Rect | null {
 
 function hasPixels(layer: Layer): boolean {
   return (layer.right ?? 0) > (layer.left ?? 0) && (layer.bottom ?? 0) > (layer.top ?? 0);
+}
+
+const NO_BOUNDS: Rect = { left: 0, top: 0, right: 0, bottom: 0 };
+
+let transparentPng: Buffer | undefined;
+/** The raster of a layer without pixels (an empty layer or placeholder): one transparent pixel, which both compositors stretch to the layer's bounds. */
+function emptyRaster(): Buffer {
+  return (transparentPng ??= createCanvas(1, 1).toBuffer("image/png"));
+}
+
+/** The frame a smart object is placed in: the box around its transform's four corners. */
+function placementBounds(layer: Layer): Rect | null {
+  const t = layer.placedLayer?.transform;
+  if (!t || t.length < 8) return null;
+  const xs = [t[0]!, t[2]!, t[4]!, t[6]!];
+  const ys = [t[1]!, t[3]!, t[5]!, t[7]!];
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
 }
 
 /**
@@ -233,9 +251,23 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
     options.onWarning?.(w);
   };
 
-  async function convertLayer(layer: Layer, parentPath: string): Promise<SceneNode | null> {
-    const path = parentPath ? `${parentPath}/${layer.name ?? "Layer"}` : layer.name ?? "Layer";
-    const id = idFromPath(path);
+  /** Siblings may share a name, so ids hash a key that numbers repeats; a layer's first occurrence keys by its plain path. */
+  async function convertLayers(layers: Layer[], parentPath: string, parentKey: string): Promise<SceneNode[]> {
+    const seen = new Map<string, number>();
+    const nodes: SceneNode[] = [];
+    for (const layer of layers) {
+      const name = layer.name ?? "Layer";
+      const repeat = seen.get(name) ?? 0;
+      seen.set(name, repeat + 1);
+      const path = parentPath ? `${parentPath}/${name}` : name;
+      const key = `${parentKey ? `${parentKey}/` : ""}${name}${repeat ? `\n${repeat}` : ""}`;
+      nodes.push(await convertLayer(layer, path, key));
+    }
+    return nodes;
+  }
+
+  async function convertLayer(layer: Layer, path: string, key: string): Promise<SceneNode> {
+    const id = idFromPath(key);
     const visible = !layer.hidden;
     const opacity = layer.opacity ?? 1;
     const { mode: blendMode, exact } = mapBlendMode(layer.blendMode);
@@ -248,13 +280,9 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
 
     // --- Group ---
     if (layer.children) {
-      const childNodes: SceneNode[] = [];
-      for (const child of layer.children) {
-        const node = await convertLayer(child, path);
-        if (node) childNodes.push(node);
-      }
+      const childNodes = await convertLayers(layer.children, path, key);
       const bounds =
-        unionBounds(childNodes.map((n) => n.bounds)) ?? { left: 0, top: 0, right: psd.width, bottom: psd.height };
+        unionBounds(childNodes.map((n) => n.bounds).filter((b) => b.right > b.left && b.bottom > b.top)) ?? { left: 0, top: 0, right: psd.width, bottom: psd.height };
       const isPassThrough = layer.blendMode === undefined || layer.blendMode === "pass through";
       return {
         type: "group",
@@ -307,11 +335,12 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
     // --- Smart object ---
     if (layer.placedLayer) {
       const canvas = layer.canvas as unknown as RasterCanvas | undefined;
-      const bounds = boundsOf(layer, canvas ? { left: 0, top: 0, right: canvas.width, bottom: canvas.height } : { left: 0, top: 0, right: 0, bottom: 0 });
+      // An empty smart object (e.g. a photo placeholder) still has the frame it was placed in.
+      const bounds = canvas ? boundsOf(layer, { left: 0, top: 0, right: canvas.width, bottom: canvas.height }) : (placementBounds(layer) ?? NO_BOUNDS);
       if (!canvas) {
         warn({ path, message: "Smart object had no decodable preview raster; rendered as empty." });
       }
-      const imageAssetId = canvas ? await sink.putImage(canvas.toBuffer("image/png"), path) : await sink.putImage(Buffer.alloc(0), path);
+      const imageAssetId = await sink.putImage(canvas ? canvas.toBuffer("image/png") : emptyRaster(), path);
       warn({
         path,
         message:
@@ -359,32 +388,20 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
     }
 
     // --- Pixel / shape layer (default) ---
+    // An empty layer has no pixels but is still a layer in the design, so it stays in the tree.
     const canvas = layer.canvas as unknown as RasterCanvas | undefined;
-    if (canvas) {
-      const bounds = boundsOf(layer, { left: 0, top: 0, right: canvas.width, bottom: canvas.height });
-      const imageAssetId = await sink.putImage(canvas.toBuffer("image/png"), path);
-      const isShape = !!(layer.vectorFill || layer.vectorMask);
-      if (isShape) {
-        return {
-          type: "shape",
-          id,
-          path,
-          name: layer.name ?? "Shape",
-          visible,
-          opacity,
-          blendMode,
-          clipping,
-          locked,
-          maskAssetId,
-          bounds,
-          imageAssetId,
-        };
-      }
+    if (!canvas && hasPixels(layer)) {
+      warn({ path, message: "Layer's pixels could not be decoded; it renders empty." });
+    }
+    const bounds = canvas ? boundsOf(layer, { left: 0, top: 0, right: canvas.width, bottom: canvas.height }) : boundsOf(layer, NO_BOUNDS);
+    const imageAssetId = await sink.putImage(canvas ? canvas.toBuffer("image/png") : emptyRaster(), path);
+    const isShape = !!(layer.vectorFill || layer.vectorMask);
+    if (isShape) {
       return {
-        type: "pixel",
+        type: "shape",
         id,
         path,
-        name: layer.name ?? "Layer",
+        name: layer.name ?? "Shape",
         visible,
         opacity,
         blendMode,
@@ -395,16 +412,23 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         imageAssetId,
       };
     }
-
-    warn({ path, message: "Layer had no decodable pixel content; it was skipped." });
-    return null;
+    return {
+      type: "pixel",
+      id,
+      path,
+      name: layer.name ?? "Layer",
+      visible,
+      opacity,
+      blendMode,
+      clipping,
+      locked,
+      maskAssetId,
+      bounds,
+      imageAssetId,
+    };
   }
 
-  const rootNodes: SceneNode[] = [];
-  for (const layer of psd.children ?? []) {
-    const node = await convertLayer(layer, "");
-    if (node) rootNodes.push(node);
-  }
+  const rootNodes = await convertLayers(psd.children ?? [], "", "");
 
   const sceneGraph: SceneGraph = {
     formatVersion: 1,

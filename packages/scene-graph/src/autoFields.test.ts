@@ -120,6 +120,12 @@ describe("autoFields", () => {
     expect(FieldConstraintsSchema.safeParse(unnamed!.constraints).success).toBe(true);
   });
 
+  it("leaves out unlocked layers with no pixels, which have nothing for a photo to fill", () => {
+    const g = graph();
+    g.root.push({ ...base("Empty", { bounds: { left: 0, top: 0, right: 0, bottom: 0 } }), type: "pixel", imageAssetId: "a_empty" });
+    expect(autoFields(g).map((f) => f.label)).not.toContain("Empty");
+  });
+
   it("defaults show/hide toggles to the layer's authored visibility", () => {
     expect(autoFields(graph()).find((f) => f.label === "Tint")!.constraints).toEqual({ kind: "visibility", defaultVisible: false });
   });
