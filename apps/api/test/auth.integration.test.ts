@@ -132,6 +132,21 @@ describe("Refresh token rotation & reuse detection", () => {
     // Reuse detection must have burned the successor too, not just the reused one.
     await expect(tokens.rotateRefreshToken(rotated.issued.raw, {})).rejects.toThrow();
   });
+
+  it("lets only one of several simultaneous presentations of a token through, and treats the rest as reuse", async () => {
+    const prisma = app.get(PrismaService);
+    const tokens = app.get(TokenService);
+    const user = await prisma.user.create({
+      data: { email: "simultaneous@example.com", displayName: "Simultaneous", status: "ACTIVE", roles: { create: { role: RoleName.END_USER } } },
+    });
+
+    const first = await tokens.issueRefreshToken(user.id, {});
+    const results = await Promise.allSettled([1, 2, 3, 4].map(() => tokens.rotateRefreshToken(first.raw, {})));
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((r) => r.status === "rejected").map((r) => String(r.reason))).toEqual(Array(3).fill(expect.stringMatching(/reuse detected/i)));
+    expect(await prisma.refreshToken.count({ where: { familyId: first.familyId, revokedAt: null } })).toBe(0);
+  });
 });
 
 describe("Rate limiting on auth endpoints", () => {
