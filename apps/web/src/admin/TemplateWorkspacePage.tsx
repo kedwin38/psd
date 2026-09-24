@@ -5,7 +5,7 @@ import { api, ApiError } from "../lib/api";
 import { stepUp } from "../lib/auth-api";
 import { isTypingTarget } from "../lib/keyboard";
 import type { FieldType, Template, TemplateField, TemplateVersion } from "../lib/types";
-import { SceneCanvas, ZOOM_STEP, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
+import { SceneCanvas, handleZoomKey, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
 import { ancestorIds, findNode, withNodeUpdate } from "../canvas/sceneTree";
 import { useLayerImages } from "../canvas/useLayerImages";
 import { LayerTree, TYPE_LABEL } from "./LayerTree";
@@ -188,14 +188,10 @@ export function TemplateWorkspacePage() {
       const canvas = canvasRef.current;
       if (mod && key === "z") void (e.shiftKey ? commands.redo() : commands.undo());
       else if (mod && key === "y") void commands.redo();
-      else if (key === "+" || key === "=") canvas?.zoomBy(ZOOM_STEP);
-      else if (key === "-" || key === "_") canvas?.zoomBy(1 / ZOOM_STEP);
-      else if (mod && key === "0") canvas?.fit();
-      else if (mod && key === "1") canvas?.actualSize();
       else if (key === "escape") {
         if (!canvas?.exitTextFocus()) setSelectedNodeId(null);
       } else if ((key === "delete" || key === "backspace") && existingField && !(e.target instanceof Element && e.target.closest("form"))) removeField(existingField);
-      else return;
+      else if (!handleZoomKey(e, canvas)) return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);

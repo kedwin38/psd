@@ -1,8 +1,9 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type Ref } from "react";
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type ReactNode, type Ref } from "react";
 import {
   createDomBuffer,
   hitTest,
   isNodeVisible,
+  measureFieldTextBounds,
   measureTextBounds,
   rasterAssetId,
   renderScene,
@@ -12,7 +13,7 @@ import {
   type LayerImageStore,
   type TextRunBox,
 } from "@psd-studio/canvas-renderer";
-import type { Rect, SceneGraph, SceneNode, TextLayerNode } from "@psd-studio/scene-graph";
+import type { FieldOverride, Rect, SceneGraph, SceneNode, TextLayerNode } from "@psd-studio/scene-graph";
 import { isTypingTarget } from "../lib/keyboard";
 import { findNode } from "./sceneTree";
 import { fitRect, toScene, zoomAround, type View } from "./viewport";
@@ -34,9 +35,23 @@ export interface SceneCanvasHandle {
 }
 
 export interface ImageDrop {
-  /** Why a dropped image can't replace this node's raster, or null if it can. */
-  rejectReason: (node: SceneNode | null) => string | null;
+  /** Why a dropped image of this MIME type ("" while the browser hides it) can't replace this node's raster, or null if it can. */
+  rejectReason: (node: SceneNode | null, mimeType: string) => string | null;
   onDrop: (node: SceneNode, file: File) => void;
+  /** Layers a drop falls through to whatever lies beneath; otherwise it targets the topmost painted layer. */
+  passThrough?: (node: SceneNode) => boolean;
+}
+
+/** Canvas zoom shortcuts shared by every page that hosts a SceneCanvas; true if the key was one of them. */
+export function handleZoomKey(e: KeyboardEvent, canvas: SceneCanvasHandle | null): boolean {
+  const mod = e.metaKey || e.ctrlKey;
+  const key = e.key.toLowerCase();
+  if (key === "+" || key === "=") canvas?.zoomBy(ZOOM_STEP);
+  else if (key === "-" || key === "_") canvas?.zoomBy(1 / ZOOM_STEP);
+  else if (mod && key === "0") canvas?.fit();
+  else if (mod && key === "1") canvas?.actualSize();
+  else return false;
+  return true;
 }
 
 type Point = { x: number; y: number };
@@ -52,6 +67,10 @@ export function SceneCanvas({
   isPickable,
   status,
   imageDrop,
+  overrides,
+  onActivate,
+  nodeLabel = (node) => node.name,
+  renderOverlay,
   ref,
 }: {
   graph: SceneGraph;
@@ -63,6 +82,13 @@ export function SceneCanvas({
   isPickable?: (node: SceneNode) => boolean;
   status?: string | null;
   imageDrop?: ImageDrop;
+  /** Field values painted over the authored graph, exactly as the server compositor applies them. */
+  overrides?: readonly FieldOverride[];
+  /** Double-clicking a pickable layer calls this instead of focusing text runs. */
+  onActivate?: (node: SceneNode) => void;
+  nodeLabel?: (node: SceneNode) => string;
+  /** DOM layered over the canvas (editors, handles), positioned with the current view. */
+  renderOverlay?: (view: View) => ReactNode;
   ref?: Ref<SceneCanvasHandle>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,10 +132,12 @@ export function SceneCanvas({
     const ctx = canvasRef.current?.getContext("2d");
     if (!ctx || !ready || !images) return;
     const frame = requestAnimationFrame(() =>
-      renderScene(ctx, graph, { scale: v.zoom * dpr, origin: { x: v.x * dpr, y: v.y * dpr }, images: images.get, visibility }),
+      renderScene(ctx, graph, { scale: v.zoom * dpr, origin: { x: v.x * dpr, y: v.y * dpr }, images: images.get, visibility, overrides }),
     );
     return () => cancelAnimationFrame(frame);
-  }, [graph, images, imagesVersion, visibility, v.zoom, v.x, v.y, dpr, pixelWidth, pixelHeight, ready]);
+  }, [graph, images, imagesVersion, visibility, overrides, v.zoom, v.x, v.y, dpr, pixelWidth, pixelHeight, ready]);
+
+  const overrideByNode = useMemo(() => new Map((overrides ?? []).map((o) => [o.nodeId, o])), [overrides]);
 
   const measureCtx = () => (measureRef.current ??= createDomBuffer(1, 1));
 
@@ -136,12 +164,13 @@ export function SceneCanvas({
       if (node.type !== "text" || (right > left && bottom > top)) return node.bounds;
       let rect = measured.get(node.id);
       if (!rect) {
-        rect = measureTextBounds(measureCtx(), node);
+        const override = overrideByNode.get(node.id);
+        rect = override?.type === "text" ? measureFieldTextBounds(measureCtx(), node, override.text) : measureTextBounds(measureCtx(), node);
         measured.set(node.id, rect);
       }
       return rect;
     };
-  }, [graph]);
+  }, [graph, overrideByNode]);
 
   const runBoxes = useMemo(() => (focused ? textRunBoxes(measureCtx(), focused) : []), [focused]);
   const focusInk = focused ? (unionRect(runBoxes.map((b) => b.rect)) ?? boundsOf(focused)) : null;
@@ -189,8 +218,9 @@ export function SceneCanvas({
     }
   }, [selected, hover, focused, focusInk?.left, focusInk?.top, focusInk?.right, focusInk?.bottom, runBoxes, focus?.run, drag, boundsOf, v.zoom, v.x, v.y, dpr, pixelWidth, pixelHeight, ready]);
 
+  // On the container, so wheeling over DOM overlays (e.g. an in-place text editor) still zooms.
   useEffect(() => {
-    const el = overlayRef.current;
+    const el = containerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -241,15 +271,15 @@ export function SceneCanvas({
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
 
-  // Drops ignore locks (the page rejects locked targets) so an image never lands on whatever a locked layer covers.
-  const hitAt = (p: Point, respectLocks = true): SceneNode | null =>
+  const hitAt = (p: Point, pickable = isPickable): SceneNode | null =>
     hitTest(graph, p.x, p.y, {
-      isVisible: (n) => isNodeVisible(n, visibility),
-      isPickable: respectLocks ? isPickable : undefined,
+      isVisible: (n) => isNodeVisible(n, visibility, overrideByNode),
+      isPickable: pickable,
       boundsOf,
       alphaAt: (n, px, py) => {
         const assetId = rasterAssetId(n);
-        if (!assetId || !images) return undefined;
+        // A replacement photo fills its layer's whole frame, whatever the placeholder's transparency.
+        if (!assetId || !images || overrideByNode.get(n.id)?.type === "image") return undefined;
         const { left, top, right, bottom } = n.bounds;
         return images.alphaAt(assetId, (px - left) / (right - left), (py - top) / (bottom - top));
       },
@@ -351,11 +381,13 @@ export function SceneCanvas({
     setPanning(false);
   };
 
+  // Drops ignore locks (the page rejects locked targets) so an image never lands on whatever a locked layer covers.
   const dropCheck = (e: DragEvent<HTMLDivElement>) => {
     const p = local(e);
-    const node = hitAt(toScene(v, p.x, p.y), false);
+    const passThrough = imageDrop!.passThrough;
+    const node = hitAt(toScene(v, p.x, p.y), passThrough ? (n) => !passThrough(n) : () => true);
     const type = e.dataTransfer.files[0]?.type ?? e.dataTransfer.items[0]?.type ?? "";
-    const reason = type && !DROPPABLE_TYPES.test(type) ? "Only PNG, JPEG or WebP images can be dropped onto a layer." : imageDrop!.rejectReason(node);
+    const reason = type && !DROPPABLE_TYPES.test(type) ? "Only PNG, JPEG or WebP images can be dropped onto a layer." : imageDrop!.rejectReason(node, type);
     return { node, reason };
   };
 
@@ -379,7 +411,14 @@ export function SceneCanvas({
     if (accepted) imageDrop.onDrop(node, file);
   };
 
-  const dragMessage = drag ? (drag.reason ?? (drag.node ? `Drop to replace the image in “${drag.node.name}”` : null)) : null;
+  const activate = (p: Point) => {
+    const node = hitAt(toScene(v, p.x, p.y));
+    if (!node) return;
+    onSelect(node);
+    onActivate!(node);
+  };
+
+  const dragMessage = drag ? (drag.reason ?? (drag.node ? `Drop to replace the image in “${nodeLabel(drag.node)}”` : null)) : null;
 
   return (
     <div
@@ -409,9 +448,10 @@ export function SceneCanvas({
           setHover(null);
         }}
         onMouseDown={(e) => e.button === 1 && e.preventDefault()}
-        onDoubleClick={(e) => focusText(local(e))}
+        onDoubleClick={(e) => (onActivate ? activate(local(e)) : focusText(local(e)))}
       />
-      {hover && !focused && !drag && <div className="scene-canvas-chip hover">{hover.name}</div>}
+      {ready && renderOverlay?.(v)}
+      {hover && !focused && !drag && <div className="scene-canvas-chip hover">{nodeLabel(hover)}</div>}
       {focused && (
         <div className="scene-canvas-chip focus" role="status" aria-label="Text layer focus">
           {focusLabel(focused, focus?.run ?? null)}

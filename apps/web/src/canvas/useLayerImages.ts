@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LayerImageStore, layerImageRequests, type AssetFetcher } from "@psd-studio/canvas-renderer";
+import { LayerImageStore, layerImageRequests, type AssetFetcher, type UploadImageRequest } from "@psd-studio/canvas-renderer";
 import type { SceneGraph } from "@psd-studio/scene-graph";
 
 /** Layer rasters decode at no more than this many pixels on the scene's long edge. */
-const MAX_DECODE_DIMENSION = 2400;
+export const MAX_DECODE_DIMENSION = 2400;
+
+const NO_UPLOADS: readonly UploadImageRequest[] = [];
 
 export interface LayerImages {
   store: LayerImageStore | null;
@@ -15,7 +17,7 @@ export interface LayerImages {
 }
 
 /** One store per storeKey (e.g. template version), so refetching the same graph never refetches its rasters. */
-export function useLayerImages(storeKey: string, graph: SceneGraph | null, fetcher: AssetFetcher): LayerImages {
+export function useLayerImages(storeKey: string, graph: SceneGraph | null, fetcher: AssetFetcher, uploads: readonly UploadImageRequest[] = NO_UPLOADS): LayerImages {
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
   const [store, setStore] = useState<LayerImageStore | null>(null);
@@ -38,9 +40,11 @@ export function useLayerImages(storeKey: string, graph: SceneGraph | null, fetch
       });
     };
     const decodeScale = Math.min(1, MAX_DECODE_DIMENSION / Math.max(graph.width, graph.height));
-    void store.load(layerImageRequests(graph, decodeScale), bump);
-  }, [store, graph]);
+    void store.load([...layerImageRequests(graph, decodeScale), ...uploads], bump);
+  }, [store, graph, uploads]);
 
-  const total = useMemo(() => (graph ? new Set(layerImageRequests(graph, 1).map((r) => r.assetId)).size : 0), [graph]);
-  return { store, version, total, loaded: store?.loadedCount ?? 0, failed: store?.failedCount ?? 0 };
+  const ids = useMemo(() => (graph ? [...new Set([...layerImageRequests(graph, 1), ...uploads].map((r) => r.assetId))] : []), [graph, uploads]);
+  // Counted over what's requested now: the store keeps bitmaps of uploads that have since been replaced.
+  const loaded = store ? ids.filter((id) => store.get(id)).length : 0;
+  return { store, version, total: ids.length, loaded, failed: store?.failedCount ?? 0 };
 }

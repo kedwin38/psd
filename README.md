@@ -149,10 +149,21 @@ stack, not just written and assumed correct — see `apps/e2e` and
 - Admin field-mapping workspace: click a layer in the real parsed layer
   tree, tag it as a text/image/smart-object/visibility field with
   constraints, publish (step-up gated).
-- End-user editor: live server-rendered preview on every edit, photo
-  upload with server-side dimension/type validation, an async export
-  pipeline producing PNG/JPEG/real-PDF (via Skia)/TIFF, and signed,
-  expiring download URLs.
+- End-user editor: a live layered canvas composited in the browser
+  (`packages/canvas-renderer`, the same one the admin workspace uses) with
+  the project's field values merged in through the same
+  `toFieldOverrides` the server's export uses. Only fields an admin mapped
+  are interactive: type text in place on the canvas (synced with the
+  sidebar, with length/required/overflow feedback), drop a photo onto its
+  layer and drag/scroll/pinch to reposition and zoom it (saved as the
+  field's crop window), toggle show/hide layers from on-canvas chips, and
+  zoom/pan like the admin canvas. Where the browser canvas knowingly
+  differs from the export (a missing font, text styling the server
+  doesn't apply yet, top-level clipping masks) the field says so. Photo
+  uploads are validated server-side (type, bytes, pixels, dimensions after
+  EXIF orientation) and bound to their project. An async export pipeline
+  produces PNG/JPEG/real-PDF (via Skia)/TIFF with signed, expiring
+  download URLs.
 
 ## Known scope limits (stated up front, not discovered later)
 
@@ -162,9 +173,13 @@ In the spirit of the spec's own "honest scope limits" principle:
   account immediately rather than sending a verification email — there's
   no SMTP/email provider configured in this environment. The schema and
   flow support adding it later without a redesign.
-- **No interactive photo cropper in the editor UI.** The API supports a
-  normalized crop rectangle per image field; the current UI always sends
-  the full image (crop `{0,0,1,1}`) rather than offering drag-to-crop.
+- **The photo cropper is reposition/zoom only.** Uploads start
+  cover-fitted to their layer (never distorted) and can be dragged and
+  scaled inside it; there's no rotation, and the admin's aspect-ratio
+  constraint isn't enforced on upload since the crop always matches the
+  layer.
+- **The editor has no undo/redo for field edits** (the admin workspace
+  does). Text boxes keep the browser's own undo while typing.
 - **No lint tooling is configured** (`lint` scripts are stubs). Type
   checking and the test suites are the current correctness net.
 - **Advanced PSD fidelity gaps are real, not hidden**: warp/Liquify and
