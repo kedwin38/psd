@@ -98,8 +98,22 @@ export const TextRunSchema = z.object({
   leadingPt: z.number().optional(),
   bold: z.boolean().optional(),
   italic: z.boolean().optional(),
+  /** Photoshop's character scaling (1 = 100%). */
+  horizontalScale: z.number().positive().optional(),
+  verticalScale: z.number().positive().optional(),
+  /** Raises the glyphs off the baseline, in local units (negative lowers them). */
+  baselineShift: z.number().optional(),
+  allCaps: z.boolean().optional(),
 });
 export type TextRun = z.infer<typeof TextRunSchema>;
+
+/** Photoshop's type frame: text lays out in its own local space (run font sizes are local units) and `transform` places it in the document. */
+export const TextFrameSchema = z.object({
+  transform: AffineTransformSchema,
+  /** Paragraph text wraps inside this local-space box; null for point text, whose first baseline starts at the local origin on its alignment edge. */
+  box: RectSchema.nullable(),
+});
+export type TextFrame = z.infer<typeof TextFrameSchema>;
 
 export const TextLayerNodeSchema = BaseNodeSchema.extend({
   type: z.literal("text"),
@@ -107,6 +121,10 @@ export const TextLayerNodeSchema = BaseNodeSchema.extend({
   alignment: z.enum(["left", "center", "right", "justify"]),
   /** Original PSD point-text bounds used for reflow on edit. */
   boxMode: z.enum(["point", "paragraph"]),
+  /** Absent on graphs ingested before frames were recorded (and for PSDs whose type transform is unset); such text lays out inside `bounds`. */
+  frame: TextFrameSchema.optional(),
+  /** Extra space between paragraphs (split at hard returns, not Photoshop's Shift+Enter line breaks), in local units. */
+  paragraphSpacing: z.object({ before: z.number(), after: z.number() }).optional(),
 });
 export type TextLayerNode = z.infer<typeof TextLayerNodeSchema>;
 

@@ -1,7 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { GlobalFonts, createCanvas, loadImage, type Image } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
-import type { FieldOverride, Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
-import { SceneCompositor } from "@psd-studio/psd-engine";
+import type { FieldOverride, Rect, SceneGraph, SceneNode, TextLayerNode } from "@psd-studio/scene-graph";
+import { SceneCompositor, parsePsdBuffer } from "@psd-studio/psd-engine";
 import { exportDivergences, fieldTextFit, isFontAvailable, measureFieldTextBounds, measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
 
 const napiBuffer = (w: number, h: number) => createCanvas(w, h).getContext("2d") as unknown as Ctx2D;
@@ -20,6 +22,10 @@ function base(id: string, bounds: SceneNode["bounds"], extra: Partial<SceneNode>
 
 function pixel(id: string, bounds: SceneNode["bounds"], extra: Partial<SceneNode> = {}): SceneNode {
   return { ...base(id, bounds, extra), type: "pixel", imageAssetId: id } as SceneNode;
+}
+
+function translate(x: number, y: number) {
+  return { m00: 1, m01: 0, m10: 0, m11: 1, m02: x, m12: y };
 }
 
 function graphOf(root: SceneNode[]): SceneGraph {
@@ -102,6 +108,7 @@ describe("renderScene", () => {
       type: "text",
       alignment: "left",
       boxMode: "point",
+      frame: { transform: translate(10, 40), box: null },
       runs: [{ text: "Hello\nWide world", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
     } as SceneNode;
     const rect = measureTextBounds(napiBuffer(1, 1), text as Extract<SceneNode, { type: "text" }>);
@@ -180,6 +187,7 @@ describe("renderScene", () => {
       type: "text",
       alignment: "center",
       boxMode: "point",
+      frame: { transform: translate(100, 40), box: null },
       runs: [{ text: "Jo", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
     } as Extract<SceneNode, { type: "text" }>;
     const ctx = napiBuffer(1, 1);
@@ -187,7 +195,9 @@ describe("renderScene", () => {
     const long = measureFieldTextBounds(ctx, text, "Jonathan Livingston");
     expect(long.right - long.left).toBeGreaterThan((short.right - short.left) * 4);
     expect((long.left + long.right) / 2).toBeCloseTo(100, 5);
-    expect(long.bottom).toBeCloseTo(20 + 20 + 5);
+    // Like Photoshop point text, replacement text stays on its line, centered on the origin.
+    expect(fieldTextFit(ctx, text, "Jonathan Livingston")).toEqual({ lines: 1, capacity: 1, overflowsWidth: false });
+    expect(long.bottom).toBeCloseTo(40 + 5);
   });
 
   it("flags text styling the server compositor doesn't apply yet", () => {
@@ -206,5 +216,74 @@ describe("renderScene", () => {
     expect(isFontAvailable(ctx, "NoSuchFontAnywhere-Bold")).toBe(false);
     const installed = GlobalFonts.families.map((f) => f.family).find((f) => !/\s/.test(f) && !/mono|serif/i.test(f));
     if (installed) expect(isFontAvailable(ctx, installed)).toBe(true);
+  });
+});
+
+/** Real Photoshop files and the extent of the pixels Photoshop rendered for each of their Arial text layers. */
+const PHOTOSHOP_FIXTURES = join(__dirname, "../../psd-engine/test/fixtures/photoshop");
+const LIBERATION_SANS = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf";
+// Metric-compatible with Arial, so ArialMT text renders with Photoshop's advance widths.
+const hasArialMetrics = existsSync(LIBERATION_SANS) && !!GlobalFonts.registerFromPath(LIBERATION_SANS, "ArialMT");
+
+function inkRect(ctx: Ctx2D): Rect {
+  const { width, height } = ctx.canvas;
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const rect = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (data[(y * width + x) * 4 + 3]! <= 20) continue;
+      rect.left = Math.min(rect.left, x);
+      rect.top = Math.min(rect.top, y);
+      rect.right = Math.max(rect.right, x + 1);
+      rect.bottom = Math.max(rect.bottom, y + 1);
+    }
+  }
+  return rect;
+}
+
+function renderAlone(graph: SceneGraph, node: SceneNode): Ctx2D {
+  const ctx = napiBuffer(graph.width, graph.height);
+  renderScene(ctx, { ...graph, root: [node] }, { scale: 1, images: () => undefined, createBuffer: napiBuffer });
+  return ctx;
+}
+
+describe("text placement", () => {
+  it.skipIf(!hasArialMetrics)("draws Photoshop text layers on the pixels Photoshop rendered for them", async () => {
+    const photoshop: [file: string, layer: string, ink: Rect][] = [
+      ["blend-and-clipping.psd", "clipping", { left: 148, top: 189, right: 251, bottom: 213 }],
+      ["blend-and-clipping.psd", "interior clipping", { left: 404, top: 176, right: 507, bottom: 225 }],
+      ["blend-and-clipping.psd", "none", { left: 168, top: 449, right: 234, bottom: 464 }],
+      ["blend-and-clipping.psd", "interior", { left: 410, top: 447, right: 505, bottom: 466 }],
+      ["text.psd", "Line 1 Line 2 Line 3 and text", { left: 84, top: 110, right: 169, bottom: 151 }],
+      ["adjustment-fillers.psd", "TEXT", { left: 63, top: 334, right: 184, bottom: 366 }],
+    ];
+    for (const [file, layer, truth] of photoshop) {
+      const { sceneGraph } = await parsePsdBuffer(readFileSync(join(PHOTOSHOP_FIXTURES, file)), { putImage: async (_png, hint) => hint });
+      const find = (nodes: SceneNode[]): SceneNode | undefined => nodes.map((n) => (n.type === "group" ? find(n.children) : n.name === layer ? n : undefined)).find(Boolean);
+      const ink = inkRect(renderAlone(sceneGraph, find(sceneGraph.root)!));
+      for (const edge of ["left", "top", "right", "bottom"] as const) expect(Math.abs(ink[edge] - truth[edge]), `${layer} ${edge}`).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it.skipIf(!hasArialMetrics)("draws rotated, scaled paragraph text exactly as the server does", async () => {
+    const text: TextLayerNode = {
+      ...base("t", { left: 0, top: 0, right: 0, bottom: 0 }),
+      type: "text",
+      alignment: "center",
+      boxMode: "paragraph",
+      // 90° clockwise at 1.5x: the box's local x runs down the scene and its local y runs leftwards.
+      frame: { transform: { m00: 0, m01: -1.5, m10: 1.5, m11: 0, m02: 150, m12: 20 }, box: { left: 0, top: 0, right: 110, bottom: 80 } },
+      runs: [{ text: "Wrapped inside a turned box", fontName: "ArialMT", fontSize: 16, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    };
+    const graph: SceneGraph = { formatVersion: 1, width: 200, height: 200, dpi: 72, colorMode: "rgb", root: [text] };
+    const client = inkRect(renderAlone(graph, text));
+    const server = napiBuffer(200, 200);
+    server.drawImage((await loadImage((await new SceneCompositor({ getImage: async () => Buffer.alloc(0) }).render(graph)).png)) as unknown as CanvasImageSource, 0, 0);
+    expect(inkRect(server)).toEqual(client);
+    // Wrapped lines stack leftwards from the box's top edge (scene x = 150) and run down it within its 165px length.
+    expect(client.right).toBeLessThanOrEqual(150);
+    expect(client.bottom - client.top).toBeGreaterThan(client.right - client.left);
+    expect(client.top).toBeGreaterThanOrEqual(20);
+    expect(client.bottom).toBeLessThanOrEqual(20 + 110 * 1.5);
   });
 });

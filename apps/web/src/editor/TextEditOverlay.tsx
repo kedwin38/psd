@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { createDomBuffer, cssFont } from "@psd-studio/canvas-renderer";
-import type { TextLayerNode } from "@psd-studio/scene-graph";
+import { createDomBuffer, cssFont, textMeasure } from "@psd-studio/canvas-renderer";
+import { fieldColumn, textFrame, type TextLayerNode } from "@psd-studio/scene-graph";
 import type { View } from "../canvas/viewport";
 
 /** Plain text of a contenteditable, reading the <br>/<div> line breaks browsers may insert as newlines. */
@@ -46,19 +46,18 @@ export function TextEditOverlay({
   const ref = useRef<HTMLDivElement>(null);
   const [limitHit, setLimitHit] = useState(false);
   const style = node.runs[0]!;
-  const sizePx = style.fontSize * view.zoom;
-  const font = cssFont(style, sizePx);
-  const lineHeight = (style.leadingPt ?? style.fontSize * 1.2) * view.zoom;
-  const { left, top, right, bottom } = node.bounds;
-  const width = (right - left || style.fontSize * 20) * view.zoom;
+  const font = cssFont(style, style.fontSize);
+  const lineHeight = style.leadingPt ?? style.fontSize * 1.2;
+  const { transform: t, box } = textFrame(node);
 
-  // The canvas puts the first baseline one font size below the box top; CSS puts it half-leading plus ascent down.
-  const cssBaseline = useMemo(() => {
+  // Laid out in the layer's local type space like the canvas, whose first baseline is column.baseline; CSS puts it half-leading plus ascent down.
+  const { column, cssBaseline } = useMemo(() => {
     const ctx = createDomBuffer(1, 1);
+    const column = fieldColumn(node, textMeasure(ctx));
     ctx.font = font;
     const m = ctx.measureText("Hg");
-    return (lineHeight - (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent)) / 2 + m.fontBoundingBoxAscent;
-  }, [font, lineHeight]);
+    return { column, cssBaseline: (lineHeight - (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent)) / 2 + m.fontBoundingBoxAscent };
+  }, [node, font, lineHeight]);
 
   useLayoutEffect(() => {
     const el = ref.current!;
@@ -92,14 +91,21 @@ export function TextEditOverlay({
     return () => el.removeEventListener("beforeinput", onBeforeInput);
   }, [maxLength]);
 
+  const z = view.zoom;
+  const top = column.baseline - cssBaseline;
+  // Point text doesn't wrap; its lines align about the origin, so the unwrapped box shifts back by its own width as needed.
+  const shift = column.width !== null ? 0 : node.alignment === "center" ? -50 : node.alignment === "right" ? -100 : 0;
   const textStyle: CSSProperties = {
-    left: left * view.zoom + view.x,
-    top: top * view.zoom + view.y + sizePx - cssBaseline,
-    width,
-    minHeight: Math.max(lineHeight, (bottom - top) * view.zoom),
+    left: 0,
+    top: 0,
+    transformOrigin: "0 0",
+    transform: `matrix(${t.m00 * z}, ${t.m10 * z}, ${t.m01 * z}, ${t.m11 * z}, ${t.m02 * z + view.x}, ${t.m12 * z + view.y}) translate(${column.left}px, ${top}px) translateX(${shift}%)`,
+    width: column.width ?? "max-content",
+    whiteSpace: column.width === null ? "pre" : undefined,
+    minHeight: Math.max(lineHeight, box ? box.bottom - top : 0),
     font,
     lineHeight: `${lineHeight}px`,
-    letterSpacing: `${((style.tracking ?? 0) / 1000) * sizePx}px`,
+    letterSpacing: `${((style.tracking ?? 0) / 1000) * style.fontSize}px`,
     textAlign: node.alignment === "justify" ? "left" : node.alignment,
   };
   const count = maxLength === null ? null : `${text.length}/${maxLength}`;
