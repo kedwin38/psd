@@ -44,10 +44,16 @@ export class AuthController {
   }
 
   private setRefreshCookie(res: Response, pair: TokenPair): void {
+    // Production serves the web app and the API from different *.up.railway.app subdomains, which the
+    // browser treats as different sites (Railway registers that suffix on the public suffix list) — a
+    // Strict cookie would never be sent cross-site, so production needs None (paired with Secure, already
+    // set). Local/dev serve both from the same host (just a different port), where Strict is same-site and
+    // safer against CSRF.
+    const isProduction = process.env.NODE_ENV === "production";
     res.cookie(REFRESH_COOKIE, pair.refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "strict",
       path: "/api/v1/auth",
       expires: pair.refreshTokenExpiresAt,
     });
