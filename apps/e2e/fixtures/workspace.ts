@@ -13,6 +13,19 @@ export const overlay = (page: Page) => page.locator(".scene-canvas-overlay");
 export const stage = (page: Page) => page.locator(".scene-canvas-stage");
 export const row = (page: Page, name: string) => page.locator(".layer-row", { has: page.locator(".layer-name", { hasText: new RegExp(`^${name}$`) }) });
 
+/**
+ * A full page load, which starts by spending a session refresh. The API rate-limits those per IP and the whole suite
+ * runs from one IP, so when the suite has used up this minute's, the load waits the limit out and tries again.
+ */
+async function loadPage(page: Page, load: () => Promise<unknown>): Promise<void> {
+  const refreshed = page.waitForResponse((res) => res.url().endsWith("/auth/refresh"));
+  await load();
+  const res = await refreshed;
+  if (res.status() !== 429) return;
+  await page.waitForTimeout(Number(res.headers()["retry-after"] ?? 60) * 1000);
+  await loadPage(page, () => page.reload());
+}
+
 /** Signs up with a passkey, as any end user does; the virtual authenticator also answers later step-ups. */
 export async function registerUser(page: Page, context: BrowserContext, email: string, name = "End User"): Promise<void> {
   const cdp = await context.newCDPSession(page);
@@ -21,7 +34,7 @@ export async function registerUser(page: Page, context: BrowserContext, email: s
     options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true },
   });
 
-  await page.goto("/register");
+  await loadPage(page, () => page.goto("/register"));
   await page.getByLabel("Full name").fill(name);
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /Create account with a passkey/i }).click();
@@ -32,7 +45,7 @@ export async function registerUser(page: Page, context: BrowserContext, email: s
 export async function registerAdmin(page: Page, context: BrowserContext, email: string): Promise<void> {
   await registerUser(page, context, email, "Canvas Admin");
   await grantRole(email, "SUPER_ADMIN");
-  await page.reload();
+  await loadPage(page, () => page.reload());
   await expect(page.getByText("Template Library")).toBeVisible({ timeout: 10_000 });
 }
 
