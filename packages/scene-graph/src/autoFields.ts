@@ -39,7 +39,7 @@ function autoFieldFor(node: SceneNode): Pick<AutoField, "fieldType" | "constrain
   switch (node.type) {
     case "text": {
       const text = node.runs.map((r) => r.text).join("").replace(/\r\n?/g, "\n");
-      const sizes = node.runs.map((r) => r.fontSize);
+      const sizes = node.runs.map((r) => r.fontSize).filter((size) => size > 0);
       return {
         fieldType: "TEXT",
         constraints: {
@@ -92,7 +92,11 @@ export function autoFields(graph: SceneGraph): AutoField[] {
     for (const node of [...nodes].reverse()) {
       const order = position++;
       const isLocked = locked || !!node.locked;
-      if (!isLocked) fields.push({ nodeId: node.id, layerPath: node.path, label: node.name.slice(0, MAX_LABEL_LENGTH) || node.type, order, ...autoFieldFor(node) });
+      if (!isLocked) {
+        // A PSD may leave layers unnamed; fields still need a label and path.
+        const label = node.name.slice(0, MAX_LABEL_LENGTH) || node.type;
+        fields.push({ nodeId: node.id, layerPath: node.path || label, label, order, ...autoFieldFor(node) });
+      }
       if (node.type === "group") visit(node.children, isLocked);
     }
   };

@@ -112,6 +112,14 @@ describe("autoFields", () => {
     });
   });
 
+  it("stays valid for unnamed layers and text without a usable font size", () => {
+    const g = graph();
+    g.root.push({ ...base(""), name: "", type: "text", runs: [run("Hi", "ArialMT", 0)], alignment: "left", boxMode: "point" });
+    const [unnamed] = autoFields(g);
+    expect(unnamed).toMatchObject({ label: "text", layerPath: "text", constraints: { minFontSizePt: 8, maxFontSizePt: 72 } });
+    expect(FieldConstraintsSchema.safeParse(unnamed!.constraints).success).toBe(true);
+  });
+
   it("defaults show/hide toggles to the layer's authored visibility", () => {
     expect(autoFields(graph()).find((f) => f.label === "Tint")!.constraints).toEqual({ kind: "visibility", defaultVisible: false });
   });

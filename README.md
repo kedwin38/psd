@@ -1,7 +1,8 @@
 # PSD Template Studio
 
-A platform where admins upload real Adobe PSD templates, tag which layers
-end users are allowed to edit, and end users fill in those fields (text,
+A platform where admins upload real Adobe PSD templates and publish them —
+every unlocked layer becomes a field end users can edit, locked layers stay
+fixed design — and end users fill in those fields (text,
 photo replacement, layer visibility) and export at full production quality
 — PDF/TIFF/PNG/JPEG, at the template's native DPI or higher. Built from the
 [full specification](#specification) with a genuine PSD compositing engine,
@@ -181,17 +182,26 @@ drive mouse, wheel, keyboard and Space+drag.)
   Ctrl/⌘+0 (fit) and Ctrl/⌘+1 (100%), alpha-accurate click selection,
   hover outlines, and drag-and-drop of PNG/JPEG/WebP files with a live
   "will land here / can't land here" highlight.
-- Admin field-mapping workspace: a Photoshop-style layers panel
+- Zero-touch publishing: upload a PSD with a name and category and publish
+  it from the template library as soon as it's processed. Every layer not
+  locked (in Photoshop, or in the workspace's Layers panel; locking a group
+  locks its contents) is a field: text layers become text, pixel/shape/smart
+  object layers photo replacements, groups and adjustments show/hide
+  toggles, labelled with the layer name and given permissive default rules
+  (`packages/scene-graph/src/autoFields.ts`). Fields are synced from lock
+  state at ingestion, on every lock change and again at publish; published
+  versions' fields are frozen.
+- Admin field-mapping workspace (optional): a Photoshop-style layers panel
   (thumbnails, search, collapsible groups, view-only eye toggles, and locks
   that are saved and make canvas clicks pass through) kept in sync with
   the canvas; double-click text to inspect its individual runs (font,
   size, colour, tracking); drop an image onto a pixel or smart-object layer
-  to replace its raster; tag layers as text/image/smart-object/visibility
-  fields with constraints; undo/redo (buttons or Ctrl/⌘+Z, Ctrl/⌘+Shift+Z,
+  to replace its raster; rename fields, change their type or tighten their
+  constraints (removing a field locks its layer; creating one unlocks it); undo/redo (buttons or Ctrl/⌘+Z, Ctrl/⌘+Shift+Z,
   Ctrl/⌘+Y) across field, eye, lock and raster changes; publish (step-up
   gated).
 - End-user editor: the project's field values composited live on the same
-  canvas. Only fields an admin mapped are interactive — everything else
+  canvas. Only the template's fields are interactive — everything else
   is fixed design that clicks and drops pass straight through: type text
   in place on the canvas (synced with the sidebar, with
   length/required/overflow feedback as you type), drop a photo onto its
