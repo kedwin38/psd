@@ -48,6 +48,26 @@ interface RequestOptions {
   isFormData?: boolean;
   skipAuthRetry?: boolean;
   signal?: AbortSignal;
+  /** Reports the share (0–1) of the request body sent so far. */
+  onUploadProgress?: (fraction: number) => void;
+}
+
+/** fetch() can't report upload progress, so bodies that need it go through XHR, answered as a regular Response. */
+function xhrRequest(
+  url: string,
+  { method, headers, body }: { method: string; headers: Record<string, string>; body?: FormData | string },
+  onUploadProgress: (fraction: number) => void,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.withCredentials = true;
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onUploadProgress(e.loaded / e.total);
+    xhr.onload = () => resolve(new Response(xhr.status === 204 ? null : xhr.responseText, { status: xhr.status, statusText: xhr.statusText }));
+    xhr.onerror = () => reject(new TypeError("Network request failed"));
+    xhr.send(body);
+  });
 }
 
 async function rawRequest(path: string, options: RequestOptions): Promise<Response> {
@@ -55,7 +75,7 @@ async function rawRequest(path: string, options: RequestOptions): Promise<Respon
   if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
   if (options.stepUpToken) headers["x-step-up-token"] = options.stepUpToken;
 
-  let body: BodyInit | undefined;
+  let body: FormData | string | undefined;
   if (options.body !== undefined) {
     if (options.isFormData) {
       body = options.body as FormData;
@@ -65,13 +85,10 @@ async function rawRequest(path: string, options: RequestOptions): Promise<Respon
     }
   }
 
-  return fetch(`${API_BASE}${path}`, {
-    method: options.method ?? "GET",
-    headers,
-    body,
-    credentials: "include",
-    signal: options.signal,
-  });
+  const url = `${API_BASE}${path}`;
+  const method = options.method ?? "GET";
+  if (options.onUploadProgress) return xhrRequest(url, { method, headers, body }, options.onUploadProgress);
+  return fetch(url, { method, headers, body, credentials: "include", signal: options.signal });
 }
 
 async function refresh(): Promise<string | null> {
@@ -138,6 +155,7 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
-  upload: <T>(path: string, form: FormData) => request<T>(path, { method: "POST", body: form, isFormData: true }),
+  upload: <T>(path: string, form: FormData, onUploadProgress?: (fraction: number) => void) =>
+    request<T>(path, { method: "POST", body: form, isFormData: true, onUploadProgress }),
   blob: (path: string, signal?: AbortSignal) => send(path, { signal }).then((res) => res.blob()),
 };

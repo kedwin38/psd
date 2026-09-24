@@ -14,6 +14,16 @@ interface AdminTemplate extends Template {
 
 const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ? (err.detail ?? err.title) : fallback);
 
+function UploadProgress({ fraction }: { fraction: number }) {
+  const percent = Math.round(fraction * 100);
+  return (
+    <div className="upload-progress">
+      <progress value={percent} max={100} aria-label="Uploading PSD" />
+      <span aria-hidden="true">{percent}%</span>
+    </div>
+  );
+}
+
 export function TemplatesAdminPage() {
   const [templates, setTemplates] = useState<AdminTemplate[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -23,6 +33,8 @@ export function TemplatesAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [publishing, setPublishing] = useState<string | null>(null);
+  // Where the progress shows: "new" for the new-template form, else the id of the template getting a new version.
+  const [uploading, setUploading] = useState<{ target: string; fraction: number } | null>(null);
   const psdInput = useRef<HTMLInputElement>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const navigate = useNavigate();
@@ -45,10 +57,15 @@ export function TemplatesAdminPage() {
     return () => clearInterval(timer);
   }, [ingesting]);
 
-  const upload = (templateId: string, file: File) => {
+  const upload = async (target: string, templateId: string, file: File) => {
     const form = new FormData();
     form.append("file", file);
-    return api.upload(`/templates/${templateId}/versions`, form);
+    setUploading({ target, fraction: 0 });
+    try {
+      await api.upload(`/templates/${templateId}/versions`, form, (fraction) => setUploading({ target, fraction }));
+    } finally {
+      setUploading(null);
+    }
   };
 
   const create = async (e: React.FormEvent) => {
@@ -61,7 +78,7 @@ export function TemplatesAdminPage() {
       setName("");
       setPsd(null);
       if (psdInput.current) psdInput.current.value = "";
-      await upload(template.id, psd);
+      await upload("new", template.id, psd);
     } catch (err) {
       setError(errorText(err, "Could not create template."));
     } finally {
@@ -77,7 +94,7 @@ export function TemplatesAdminPage() {
     setError(null);
     setBusy(true);
     try {
-      await upload(templateId, file);
+      await upload(templateId, templateId, file);
       await load();
     } catch (err) {
       setError(errorText(err, "Upload failed."));
@@ -118,6 +135,7 @@ export function TemplatesAdminPage() {
                   <p className="hint">{categories.find((c) => c.id === t.categoryId)?.name ?? "Uncategorized"}</p>
                 </div>
                 <div className="row">
+                  {uploading?.target === t.id && <UploadProgress fraction={uploading.fraction} />}
                   <input
                     type="file"
                     accept=".psd,.psb"
@@ -212,6 +230,7 @@ export function TemplatesAdminPage() {
           <button type="submit" className="primary" disabled={busy || categories.length === 0}>
             Create template
           </button>
+          {uploading?.target === "new" && <UploadProgress fraction={uploading.fraction} />}
           {categories.length === 0 ? (
             <p className="hint">Create a category first.</p>
           ) : (

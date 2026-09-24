@@ -322,6 +322,13 @@ button.icon-btn.sm { width: 26px; height: 26px; }
 .spinner.lg { width: 28px; height: 28px; border-width: 2.5px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.upload-progress { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.upload-progress progress { flex: 1; min-width: 96px; height: 6px; appearance: none; border: none; border-radius: var(--r-pill); background: var(--gray-100); overflow: hidden; }
+.upload-progress progress::-webkit-progress-bar { background: var(--gray-100); }
+.upload-progress progress::-webkit-progress-value { background: var(--accent-500); transition: width 0.15s ease; }
+.upload-progress progress::-moz-progress-bar { background: var(--accent-500); }
+.upload-progress span { min-width: 3ch; text-align: right; }
+
 /* Skeletons */
 .skeleton {
   border-radius: var(--r-sm);
