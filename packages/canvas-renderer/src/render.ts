@@ -191,7 +191,7 @@ function layoutFor(ctx: Ctx2D, node: TextLayerNode, text?: string): RunsLayout {
   try {
     const measure = textMeasure(ctx);
     const runs = text === undefined ? node.runs : [{ ...node.runs[0]!, text }];
-    return { ...layoutText(node, runs, measure, text === undefined ? authoredWrapWidth(node) : fieldWrapWidth(node, measure)), runs };
+    return { ...layoutText(node, runs, measure, text === undefined ? authoredWrapWidth(node) : fieldWrapWidth(node)), runs };
   } finally {
     ctx.restore();
   }
@@ -247,7 +247,7 @@ export interface FieldTextFit {
   lines: number;
   /** Lines the layout has room for: those fitting a paragraph box, or point text's authored line count; more paint past it. */
   capacity: number;
-  /** A single word wider than the box can't wrap and paints past its right edge. */
+  /** A single word wider than the box can't wrap and paints past its right edge (point text has no box to overflow). */
   overflowsWidth: boolean;
 }
 
@@ -255,11 +255,11 @@ export interface FieldTextFit {
 export function fieldTextFit(ctx: Ctx2D, node: TextLayerNode, text: string): FieldTextFit {
   ctx.save();
   const measure = textMeasure(ctx);
-  const width = fieldWrapWidth(node, measure);
+  const width = fieldWrapWidth(node);
   const { lines } = layoutText(node, [{ ...node.runs[0]!, text }], measure, width);
   const authoredLines = layoutText(node, node.runs, measure, authoredWrapWidth(node)).lines.length;
   ctx.restore();
-  const overflowsWidth = lines.some((line) => lineWidth(line) > width + 0.5);
+  const overflowsWidth = width !== null && lines.some((line) => lineWidth(line) > width + 0.5);
   const box = textFrame(node).box;
   if (!box) return { lines: lines.length, capacity: authoredLines, overflowsWidth };
   const style = node.runs[0]!;

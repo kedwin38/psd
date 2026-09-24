@@ -193,13 +193,11 @@ describe("renderScene", () => {
     const ctx = napiBuffer(1, 1);
     const short = measureFieldTextBounds(ctx, text, "Jo");
     const long = measureFieldTextBounds(ctx, text, "Jonathan Livingston");
-    expect(long.right - long.left).toBeGreaterThan((short.right - short.left) * 3);
+    expect(long.right - long.left).toBeGreaterThan((short.right - short.left) * 4);
     expect((long.left + long.right) / 2).toBeCloseTo(100, 5);
-    // Point text wraps replacement text at its authored width, one auto-leading line (24) per wrapped line.
-    const { lines } = fieldTextFit(ctx, text, "Jonathan Livingston");
-    expect(lines).toBe(2);
-    expect(short.bottom).toBeCloseTo(40 + 5);
-    expect(long.bottom).toBeCloseTo(40 + 5 + 24);
+    // Like Photoshop point text, replacement text stays on its line, centered on the origin.
+    expect(fieldTextFit(ctx, text, "Jonathan Livingston")).toEqual({ lines: 1, capacity: 1, overflowsWidth: false });
+    expect(long.bottom).toBeCloseTo(40 + 5);
   });
 
   it("flags text styling the server compositor doesn't apply yet", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TextLayerNode, TextRun } from "./nodes.js";
-import { fieldColumn, glyphTransform, layoutText, lineWidth, transformRect, type TextMeasure } from "./textLayout.js";
+import { fieldColumn, fieldWrapWidth, glyphTransform, layoutText, lineWidth, transformRect, type TextMeasure } from "./textLayout.js";
 
 /** Every character is half an em wide; capitals are 0.7 em tall. */
 const measure: TextMeasure = {
@@ -97,9 +97,10 @@ describe("layoutText", () => {
 });
 
 describe("fieldColumn", () => {
-  it("wraps point-text replacements at the authored width, aligned about the origin", () => {
+  it("never wraps point-text replacements, which align about the origin as in Photoshop", () => {
     const n = node([run("abcdef")], { alignment: "center" });
-    expect(fieldColumn(n, measure)).toEqual({ left: -30, width: 60, baseline: 0 });
+    expect(fieldColumn(n, measure)).toEqual({ left: 0, width: null, baseline: 0 });
+    expect(lines(n, fieldWrapWidth(n))).toEqual([{ baseline: 0, x: -30, text: "abcdef", width: 60 }]);
   });
 
   it("wraps paragraph replacements in the box, below its first-line hang", () => {

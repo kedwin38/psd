@@ -93,12 +93,15 @@ export function TextEditOverlay({
 
   const z = view.zoom;
   const top = column.baseline - cssBaseline;
+  // Point text doesn't wrap; its lines align about the origin, so the unwrapped box shifts back by its own width as needed.
+  const shift = column.width !== null ? 0 : node.alignment === "center" ? -50 : node.alignment === "right" ? -100 : 0;
   const textStyle: CSSProperties = {
     left: 0,
     top: 0,
     transformOrigin: "0 0",
-    transform: `matrix(${t.m00 * z}, ${t.m10 * z}, ${t.m01 * z}, ${t.m11 * z}, ${t.m02 * z + view.x}, ${t.m12 * z + view.y}) translate(${column.left}px, ${top}px)`,
-    width: column.width,
+    transform: `matrix(${t.m00 * z}, ${t.m10 * z}, ${t.m01 * z}, ${t.m11 * z}, ${t.m02 * z + view.x}, ${t.m12 * z + view.y}) translate(${column.left}px, ${top}px) translateX(${shift}%)`,
+    width: column.width ?? "max-content",
+    whiteSpace: column.width === null ? "pre" : undefined,
     minHeight: Math.max(lineHeight, box ? box.bottom - top : 0),
     font,
     lineHeight: `${lineHeight}px`,

@@ -44,19 +44,18 @@ export function textFrame(node: TextLayerNode): TextFrame {
   return node.frame ?? { transform: IdentityTransform, box: node.bounds };
 }
 
-/** Width replacement text wraps at, in local units: the paragraph box, or for point text the widest authored line. */
-export function fieldWrapWidth(node: TextLayerNode, measure: TextMeasure): number {
+/** Width replacement text wraps at, in local units: the paragraph box (or a frame-less graph's bounds); like Photoshop, point text never wraps. */
+export function fieldWrapWidth(node: TextLayerNode): number | null {
   const { box } = textFrame(node);
-  const width = box ? box.right - box.left : Math.max(0, ...layoutText(node, node.runs, measure, null).lines.map(lineWidth));
-  return width || node.runs[0]!.fontSize * 20;
+  return box ? box.right - box.left || node.runs[0]!.fontSize * 20 : null;
 }
 
-/** The local-space column replacement text (styled as the first run) wraps and aligns in, and its first baseline. */
-export function fieldColumn(node: TextLayerNode, measure: TextMeasure): { left: number; width: number; baseline: number } {
+/** The local-space column replacement text (styled as the first run) lays out in: its left edge, wrap width (null: point text, aligned about the origin) and first baseline. */
+export function fieldColumn(node: TextLayerNode, measure: TextMeasure): { left: number; width: number | null; baseline: number } {
   const { box } = textFrame(node);
-  const width = fieldWrapWidth(node, measure);
-  if (box) return { left: box.left, width, baseline: box.top + measure.capHeight(node.runs[0]!) };
-  return { left: alignAt(node.alignment, width), width, baseline: 0 };
+  const style = node.runs[0]!;
+  if (!box) return { left: 0, width: null, baseline: 0 };
+  return { left: box.left, width: fieldWrapWidth(node), baseline: box.top + measure.capHeight(style) * (style.verticalScale ?? 1) };
 }
 
 /** Wrap width for the authored runs: Photoshop wraps paragraph text in its box and never wraps point text. */

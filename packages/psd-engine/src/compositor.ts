@@ -280,7 +280,7 @@ export class SceneCompositor {
         return ctx.measureText("H").actualBoundingBoxAscent;
       },
     };
-    const { transform: t, lines } = layoutText(node, runs, measure, override?.type === "text" ? fieldWrapWidth(node, measure) : authoredWrapWidth(node));
+    const { transform: t, lines } = layoutText(node, runs, measure, override?.type === "text" ? fieldWrapWidth(node) : authoredWrapWidth(node));
     ctx.textBaseline = "alphabetic";
     ctx.transform(scale, 0, 0, scale, 0, 0);
     ctx.transform(t.m00, t.m10, t.m01, t.m11, t.m02, t.m12);
