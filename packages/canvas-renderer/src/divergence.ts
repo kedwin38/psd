@@ -1,6 +1,6 @@
 import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 
-/** The "Diverges from server" notes in render.ts, as checks an editor can surface for a node. */
+/** The "Diverges from server" notes in render.ts, as checks an editor can surface for a node (fonts: see isFontAvailable). */
 export type ExportDivergence = "text-tracking" | "text-opacity" | "text-blend" | "top-level-clipping";
 
 export function exportDivergences(graph: SceneGraph, node: SceneNode): ExportDivergence[] {

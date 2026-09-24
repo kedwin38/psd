@@ -22,7 +22,7 @@ const PADDING = 24;
 const FOCUS_PADDING = 64;
 /** Double-clicking a short word shouldn't zoom so far in that its surroundings vanish. */
 const FOCUS_MAX_ZOOM = 8;
-export const ZOOM_STEP = 1.25;
+const ZOOM_STEP = 1.25;
 const CLICK_SLOP_PX = 4;
 const DROPPABLE_TYPES = /^image\/(png|jpeg|webp)$/;
 
@@ -96,7 +96,7 @@ export function SceneCanvas({
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const measureRef = useRef<Ctx2D | null>(null);
   const [box, setBox] = useState({ width: 0, height: 0 });
-  /** null follows "fit to screen" across resizes; set once the admin zooms or pans. */
+  /** null follows "fit to screen" across resizes; set once the user zooms or pans. */
   const [view, setView] = useState<View | null>(null);
   const [hover, setHover] = useState<SceneNode | null>(null);
   const [focus, setFocus] = useState<{ nodeId: string; run: number | null } | null>(null);
@@ -381,7 +381,8 @@ export function SceneCanvas({
     setPanning(false);
   };
 
-  // Drops ignore locks (the page rejects locked targets) so an image never lands on whatever a locked layer covers.
+  // Unless the page passes them through, drops target layers clicks skip (e.g. locked ones) so the page can refuse them,
+  // rather than landing on whatever such a layer covers.
   const dropCheck = (e: DragEvent<HTMLDivElement>) => {
     const p = local(e);
     const passThrough = imageDrop!.passThrough;

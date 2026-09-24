@@ -42,7 +42,7 @@ jobs:
       - name: Lint every package
         run: pnpm run lint
 
-      - name: Unit tests (scene-graph, psd-engine)
+      - name: Unit tests (scene-graph, psd-engine, canvas-renderer)
         run: pnpm run test:unit
 
   integration-and-e2e:
