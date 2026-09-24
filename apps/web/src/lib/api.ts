@@ -30,6 +30,7 @@ interface RequestOptions {
   stepUpToken?: string;
   isFormData?: boolean;
   skipAuthRetry?: boolean;
+  signal?: AbortSignal;
 }
 
 async function rawRequest(path: string, options: RequestOptions): Promise<Response> {
@@ -52,6 +53,7 @@ async function rawRequest(path: string, options: RequestOptions): Promise<Respon
     headers,
     body,
     credentials: "include",
+    signal: options.signal,
   });
 }
 
@@ -64,7 +66,7 @@ export async function tryRefresh(): Promise<string | null> {
   return accessToken;
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+async function send(path: string, options: RequestOptions): Promise<Response> {
   let res = await rawRequest(path, options);
 
   if (res.status === 401 && !options.skipAuthRetry && path !== "/auth/refresh") {
@@ -85,7 +87,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     }
     throw new ApiError(res.status, problem.title ?? res.statusText, problem.detail, problem.errors);
   }
+  return res;
+}
 
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const res = await send(path, options);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   return text ? (JSON.parse(text) as T) : (undefined as T);
@@ -98,4 +104,5 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   upload: <T>(path: string, form: FormData) => request<T>(path, { method: "POST", body: form, isFormData: true }),
+  blob: (path: string, signal?: AbortSignal) => send(path, { signal }).then((res) => res.blob()),
 };

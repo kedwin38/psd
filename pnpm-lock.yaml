@@ -157,6 +157,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@psd-studio/canvas-renderer':
+        specifier: workspace:*
+        version: link:../../packages/canvas-renderer
       '@psd-studio/scene-graph':
         specifier: workspace:*
         version: link:../../packages/scene-graph

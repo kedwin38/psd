@@ -12,6 +12,7 @@
     "test": "echo \"(unit tests covered by e2e package)\""
   },
   "dependencies": {
+    "@psd-studio/canvas-renderer": "workspace:*",
     "@psd-studio/scene-graph": "workspace:*",
     "@simplewebauthn/browser": "^14.0.0",
     "qrcode": "^1.5.4",

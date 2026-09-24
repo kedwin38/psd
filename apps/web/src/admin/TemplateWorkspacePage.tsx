@@ -1,22 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { api, ApiError } from "../lib/api";
 import { stepUp } from "../lib/auth-api";
 import type { Template, TemplateField, TemplateVersion } from "../lib/types";
+import { SceneCanvas } from "../canvas/SceneCanvas";
+import { findNode, withNodeUpdate } from "../canvas/sceneTree";
+import { useLayerImages } from "../canvas/useLayerImages";
 import { LayerTree } from "./LayerTree";
 import { FieldMappingForm } from "./FieldMappingForm";
 
-function findNode(nodes: SceneNode[], id: string): SceneNode | null {
-  for (const n of nodes) {
-    if (n.id === id) return n;
-    if (n.type === "group") {
-      const found = findNode(n.children, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
+const isPickable = (node: SceneNode) => !node.locked;
 
 export function TemplateWorkspacePage() {
   const { templateId, versionId } = useParams<{ templateId: string; versionId: string }>();
@@ -26,8 +20,8 @@ export function TemplateWorkspacePage() {
   const [version, setVersion] = useState<TemplateVersion | null>(null);
   const [sceneGraph, setSceneGraph] = useState<SceneGraph | null>(null);
   const [fields, setFields] = useState<TemplateField[]>([]);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -42,12 +36,7 @@ export function TemplateWorkspacePage() {
     setVersion(v);
     setFields(f);
     if (v.ingestStatus === "READY") {
-      const [sg, preview] = await Promise.all([
-        api.get<SceneGraph>(`/templates/${templateId}/versions/${versionId}/scene-graph`),
-        api.get<{ dataUrl: string }>(`/templates/${templateId}/versions/${versionId}/preview`),
-      ]);
-      setSceneGraph(sg);
-      setPreviewUrl(preview.dataUrl);
+      setSceneGraph(await api.get<SceneGraph>(`/templates/${templateId}/versions/${versionId}/scene-graph`));
     }
   };
 
@@ -56,9 +45,37 @@ export function TemplateWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId, versionId]);
 
+  const fetchLayerAsset = useCallback(
+    (assetId: string, signal: AbortSignal) => api.blob(`/templates/${templateId}/versions/${versionId}/layer-assets/${encodeURIComponent(assetId)}`, signal),
+    [templateId, versionId],
+  );
+  const layerImages = useLayerImages(`${templateId}/${versionId}`, sceneGraph, fetchLayerAsset);
+
   const mappedNodeIds = useMemo(() => new Set(fields.map((f) => f.nodeId)), [fields]);
   const selectedNode = sceneGraph && selectedNodeId ? findNode(sceneGraph.root, selectedNodeId) : null;
   const existingField = fields.find((f) => f.nodeId === selectedNodeId);
+
+  const isVisible = useCallback((node: SceneNode) => visibility.get(node.id) ?? node.visible, [visibility]);
+  const toggleVisible = (node: SceneNode) => setVisibility((prev) => new Map(prev).set(node.id, !(prev.get(node.id) ?? node.visible)));
+
+  const toggleLocked = async (node: SceneNode) => {
+    const locked = !node.locked;
+    setError(null);
+    setSceneGraph((sg) => sg && withNodeUpdate(sg, node.id, { locked }));
+    try {
+      await api.patch(`/templates/${templateId}/versions/${versionId}/nodes/${node.id}`, { locked });
+    } catch (err) {
+      setSceneGraph((sg) => sg && withNodeUpdate(sg, node.id, { locked: !locked }));
+      setError(err instanceof ApiError ? (err.detail ?? err.title) : "Could not update the layer lock.");
+    }
+  };
+
+  const canvasStatus =
+    layerImages.failed > 0
+      ? `${layerImages.failed} layer image(s) failed to load`
+      : layerImages.loaded < layerImages.total
+        ? `Loading layers ${layerImages.loaded}/${layerImages.total}…`
+        : null;
 
   const saveField = async (fieldType: string, label: string, constraints: Record<string, unknown>) => {
     if (!selectedNode) return;
@@ -153,11 +170,33 @@ export function TemplateWorkspacePage() {
         <div className="mapping-pane">
           <h3>Layers</h3>
           {sceneGraph && (
-            <LayerTree nodes={sceneGraph.root} selectedId={selectedNodeId} mappedNodeIds={mappedNodeIds} onSelect={(n) => setSelectedNodeId(n.id)} />
+            <LayerTree
+              nodes={sceneGraph.root}
+              selectedId={selectedNodeId}
+              mappedNodeIds={mappedNodeIds}
+              onSelect={(n) => setSelectedNodeId(n.id)}
+              isVisible={isVisible}
+              onToggleVisible={toggleVisible}
+              onToggleLocked={toggleLocked}
+              images={layerImages.store}
+            />
           )}
         </div>
 
-        <div className="editor-canvas-pane">{previewUrl && <img src={previewUrl} alt="Template preview" />}</div>
+        <div className="workspace-canvas-pane">
+          {sceneGraph && (
+            <SceneCanvas
+              graph={sceneGraph}
+              images={layerImages.store}
+              imagesVersion={layerImages.version}
+              visibility={visibility}
+              selectedId={selectedNodeId}
+              onSelect={(n) => setSelectedNodeId(n.id)}
+              isPickable={isPickable}
+              status={canvasStatus}
+            />
+          )}
+        </div>
 
         <div className="mapping-pane">
           {selectedNode ? (

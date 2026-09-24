@@ -132,12 +132,54 @@ tr:hover td { background: var(--surface-2); }
 .editor-fields { overflow-y: auto; padding-right: 4px; }
 .field-block { padding: 14px; border-bottom: 1px solid var(--border); }
 
-.layer-tree { font-size: 13px; }
-.layer-tree .layer-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
-.layer-tree .layer-row:hover { background: var(--surface-2); }
-.layer-tree .layer-row.selected { background: rgba(79,140,255,0.15); }
-.layer-tree .layer-row .type-tag { font-size: 10px; color: var(--text-dim); text-transform: uppercase; }
-.layer-tree .indent { display: inline-block; }
+.checkerboard {
+  background-color: #fff;
+  background-image: conic-gradient(#d6d6d6 25%, transparent 0 50%, #d6d6d6 0 75%, transparent 0);
+  background-size: 16px 16px;
+}
 
-.mapping-layout { display: grid; grid-template-columns: 280px 1fr 320px; gap: 20px; height: calc(100vh - 56px); }
+.layers-panel { display: flex; flex-direction: column; gap: 8px; }
+.layers-search { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 13px; }
+.layers-search:focus { outline: none; border-color: var(--accent); }
+
+.layer-tree { font-size: 13px; }
+.layer-tree .layer-row { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 2px; border-radius: 6px; cursor: pointer; }
+.layer-tree .layer-row:hover { background: var(--surface-2); }
+.layer-tree .layer-row:focus-visible { outline: 1px solid var(--accent); }
+.layer-tree .layer-row.selected { background: rgba(79,140,255,0.15); }
+.layer-tree .layer-row.is-hidden .layer-thumb,
+.layer-tree .layer-row.is-hidden .layer-label { opacity: 0.45; }
+.layer-tree .layer-row .type-tag { font-size: 10px; color: var(--text-dim); text-transform: uppercase; flex: none; }
+.layer-tree .layer-indent { flex: none; }
+.layer-icon-btn, .layer-caret {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border: none; border-radius: 4px; background: none; color: var(--text-dim);
+}
+.layer-icon-btn:hover { color: var(--text); background: var(--bg); }
+.layer-icon-btn[aria-pressed="false"] svg { opacity: 0.3; }
+.layer-icon-btn.active { color: var(--text); }
+.layer-caret { width: 14px; }
+.layer-caret:disabled { opacity: 1; cursor: default; }
+.layer-caret svg { transition: transform 0.1s; }
+.icon-placeholder { display: inline-block; width: 14px; }
+.layer-thumb { flex: none; width: 34px; height: 26px; border: 1px solid var(--border); border-radius: 3px; }
+.layer-thumb.icon { display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-dim); font-size: 14px; }
+.layer-thumb.text { font-family: Georgia, serif; font-weight: 700; color: var(--text); }
+.layer-label { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.layer-name, .font-badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.font-badge { font-size: 10px; color: var(--text-dim); cursor: help; }
+.font-badge-caption { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+
+.mapping-layout { display: grid; grid-template-columns: 300px 1fr 320px; gap: 20px; height: calc(100vh - 56px); }
 .mapping-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; overflow-y: auto; }
+
+.workspace-canvas-pane { position: relative; min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.scene-canvas { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.scene-canvas-stage { position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+.scene-canvas-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.scene-canvas-chip {
+  position: absolute; left: 12px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(15,17,21,0.85); color: var(--text); font-size: 12px; pointer-events: none;
+}
+.scene-canvas-chip.hover { top: 12px; }
+.scene-canvas-chip.status { bottom: 12px; color: var(--text-dim); }
