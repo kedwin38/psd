@@ -104,6 +104,7 @@ function LayerRows(
             <div
               className={`layer-row${node.id === selectedId ? " selected" : ""}${!visible || ancestorHidden ? " is-hidden" : ""}`}
               role="treeitem"
+              aria-level={depth + 1}
               aria-selected={node.id === selectedId}
               aria-expanded={isGroup ? expanded : undefined}
               data-node-id={node.id}

@@ -13,8 +13,8 @@ export const overlay = (page: Page) => page.locator(".scene-canvas-overlay");
 export const stage = (page: Page) => page.locator(".scene-canvas-stage");
 export const row = (page: Page, name: string) => page.locator(".layer-row", { has: page.locator(".layer-name", { hasText: new RegExp(`^${name}$`) }) });
 
-/** Registers a passkey user (the virtual authenticator also answers publish's step-up) and makes them a platform admin. */
-export async function registerAdmin(page: Page, context: BrowserContext, email: string): Promise<void> {
+/** Signs up with a passkey, as any end user does; the virtual authenticator also answers later step-ups. */
+export async function registerUser(page: Page, context: BrowserContext, email: string, name = "End User"): Promise<void> {
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable");
   await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -22,10 +22,15 @@ export async function registerAdmin(page: Page, context: BrowserContext, email: 
   });
 
   await page.goto("/register");
-  await page.getByLabel("Full name").fill("Canvas Admin");
+  await page.getByLabel("Full name").fill(name);
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /Create account with a passkey/i }).click();
   await page.waitForURL("/", { timeout: 15_000 });
+}
+
+/** Registers a passkey user and makes them a platform admin. */
+export async function registerAdmin(page: Page, context: BrowserContext, email: string): Promise<void> {
+  await registerUser(page, context, email, "Canvas Admin");
   await grantRole(email, "SUPER_ADMIN");
   await page.reload();
   await expect(page.getByText("Template Library")).toBeVisible({ timeout: 10_000 });
