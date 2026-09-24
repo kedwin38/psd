@@ -106,11 +106,30 @@ export class AuthService {
     return this.issueSessionFor(userId, "auth.login.passkey", ctx);
   }
 
+  /**
+   * These two endpoints are unauthenticated so a brand-new account can bootstrap its first credential
+   * before it can log in at all — but that only holds while the account truly has none yet. Without this
+   * check, anyone who knows an existing account's email (nothing secret) could enroll their own passkey
+   * on it at any later time and sign in as that user, bypassing its real password/TOTP/passkey entirely.
+   */
+  private async assertNoCredentialsYet(userId: string): Promise<void> {
+    const [passkeyCount, user, totp] = await Promise.all([
+      this.prisma.webAuthnCredential.count({ where: { userId } }),
+      this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } }),
+      this.prisma.totpCredential.findUnique({ where: { userId }, select: { verifiedAt: true } }),
+    ]);
+    if (passkeyCount > 0 || user.passwordHash || totp?.verifiedAt) {
+      throw new ForbiddenException("This account already has a credential. Sign in and use step-up to add another passkey.");
+    }
+  }
+
   async passkeyRegisterOptions(userId: string, email: string, displayName: string) {
+    await this.assertNoCredentialsYet(userId);
     return this.webauthn.generateRegistrationOptionsFor(userId, email, displayName);
   }
 
   async passkeyRegisterVerify(userId: string, response: object, deviceLabel: string | undefined, ctx: RequestContext): Promise<void> {
+    await this.assertNoCredentialsYet(userId);
     await this.webauthn.verifyRegistration(userId, response as never, deviceLabel);
     await this.audit.record({
       actorId: userId,

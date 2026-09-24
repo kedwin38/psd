@@ -46,6 +46,34 @@ describe("Auth & RBAC integration", () => {
     expect(res.body.errors?.[0]).toContain("email");
   });
 
+  it("refuses to enroll a passkey on an account that already has a credential (account-takeover guard)", async () => {
+    const prisma = app.get(PrismaService);
+    const user = await prisma.user.create({
+      data: { email: "already-credentialed@example.com", displayName: "Existing User", status: "ACTIVE", passwordHash: "not-a-real-hash-just-non-null" },
+    });
+
+    const res = await request(app.getHttpServer())
+      .post("/api/v1/auth/webauthn/register/options")
+      .send({ email: user.email });
+
+    expect(res.status).toBe(403);
+    expect(res.body.detail ?? res.body.title).toContain("already has a credential");
+  });
+
+  it("allows passkey enrollment on a genuinely fresh account with no credentials yet", async () => {
+    const prisma = app.get(PrismaService);
+    const user = await prisma.user.create({
+      data: { email: "brand-new@example.com", displayName: "New User", status: "ACTIVE" },
+    });
+
+    const res = await request(app.getHttpServer())
+      .post("/api/v1/auth/webauthn/register/options")
+      .send({ email: user.email });
+
+    expect(res.status).toBe(201);
+    expect(res.body.challenge).toBeDefined();
+  });
+
   it("rejects a category creation attempt from an END_USER (RBAC)", async () => {
     const prisma = app.get(PrismaService);
     const tokens = app.get(TokenService);
