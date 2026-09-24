@@ -270,6 +270,7 @@ export function ProjectEditorPage() {
           <TextEditOverlay
             key={editingField.id}
             node={editNode}
+            label={editingField.label}
             view={view}
             text={currentText(editingField)}
             maxLength={textRules(editingField).maxLength}

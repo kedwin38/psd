@@ -26,6 +26,7 @@ function readPlainText(el: HTMLElement): string {
  */
 export function TextEditOverlay({
   node,
+  label,
   view,
   text,
   maxLength,
@@ -34,6 +35,7 @@ export function TextEditOverlay({
   onClose,
 }: {
   node: TextLayerNode;
+  label: string;
   view: View;
   text: string;
   maxLength: number | null;
@@ -113,7 +115,7 @@ export function TextEditOverlay({
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"
-        aria-label={`Edit ${node.name} on canvas`}
+        aria-label={`Edit ${label} on canvas`}
         spellCheck
         onInput={(e) => {
           setLimitHit(false);
