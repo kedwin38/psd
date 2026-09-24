@@ -12,6 +12,7 @@ import { sniffImageMime } from "../common/image-sniff";
 import type { CreateProjectDto, PatchFieldValueDto } from "./dto/project.dto";
 
 const PREVIEW_MAX_DIMENSION = 1000;
+const MAX_UPLOAD_IMAGE_PIXELS = 100_000_000;
 
 @Injectable()
 export class ProjectsService {
@@ -72,9 +73,13 @@ export class ProjectsService {
       throw new BadRequestException(`Image exceeds the ${constraints.maxUploadBytes} byte limit for this field.`);
     }
 
-    const metadata = await sharp(file.buffer).metadata();
-    if (!metadata.width || !metadata.height) throw new BadRequestException("Could not read image dimensions.");
-    if (metadata.width < constraints.minWidthPx || metadata.height < constraints.minHeightPx) {
+    const metadata = await sharp(file.buffer).metadata().catch(() => null);
+    if (!metadata?.width || !metadata.height) throw new BadRequestException("Could not read image dimensions.");
+    // Browsers decode uploads whole for the live editor canvas, so bound the decoded size like layer images.
+    if (metadata.width * metadata.height > MAX_UPLOAD_IMAGE_PIXELS) throw new BadRequestException(`Image exceeds the ${MAX_UPLOAD_IMAGE_PIXELS} pixel limit.`);
+    // EXIF orientation swaps the effective dimensions; every renderer draws the upload upright.
+    const [width, height] = (metadata.orientation ?? 1) >= 5 ? [metadata.height, metadata.width] : [metadata.width, metadata.height];
+    if (width < constraints.minWidthPx || height < constraints.minHeightPx) {
       throw new BadRequestException(`Image must be at least ${constraints.minWidthPx}x${constraints.minHeightPx}px.`);
     }
 
@@ -83,10 +88,19 @@ export class ProjectsService {
       mimeType: sniffed,
       ownerType: AssetOwnerType.USER_UPLOAD,
       hint: `project_${projectId}_field_${fieldId}`,
-      width: metadata.width,
-      height: metadata.height,
+      width,
+      height,
+      projectId,
     });
-    return { assetId: asset.id, width: metadata.width, height: metadata.height };
+    return { assetId: asset.id, width, height };
+  }
+
+  /** Streams one of this project's own uploads to the browser editor's canvas. */
+  async getUpload(projectId: string, assetId: string, userId: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    await this.getOwned(projectId, userId);
+    const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
+    if (!asset || asset.ownerType !== AssetOwnerType.USER_UPLOAD || asset.projectId !== projectId) throw new NotFoundException("Upload not found in this project.");
+    return { bytes: await this.storage.getAssetBytes(asset.storageKey), mimeType: asset.mimeType };
   }
 
   async patchField(projectId: string, fieldId: string, dto: PatchFieldValueDto, userId: string) {
@@ -98,8 +112,9 @@ export class ProjectsService {
 
     if (dto.type === "image") {
       const asset = await this.prisma.asset.findUnique({ where: { id: dto.imageAssetId } });
-      if (!asset || asset.ownerType !== AssetOwnerType.USER_UPLOAD) {
-        throw new BadRequestException("Unknown uploaded image asset; upload it first via /projects/:id/uploads.");
+      // Only this project's own uploads: never another user's photo or a template/export asset.
+      if (!asset || asset.ownerType !== AssetOwnerType.USER_UPLOAD || asset.projectId !== projectId) {
+        throw new BadRequestException("Unknown uploaded image asset; upload it to this project first via /projects/:id/uploads.");
       }
     }
 

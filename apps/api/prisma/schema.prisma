@@ -281,10 +281,14 @@ model Asset {
   width       Int?
   height      Int?
   createdAt   DateTime @default(now())
+  // Set on USER_UPLOAD assets: the project they were uploaded to, which alone may use and read them.
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectId   String?
 
   templateVersions TemplateVersion[]
   exportJobs       ExportJob[] @relation("ExportOutputAsset")
 
+  @@index([projectId])
   @@map("assets")
 }
 
@@ -314,6 +318,7 @@ model Project {
 
   fieldValues ProjectFieldValue[]
   exportJobs  ExportJob[]
+  uploads     Asset[]
 
   @@index([userId])
   @@map("projects")

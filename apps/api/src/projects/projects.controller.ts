@@ -1,5 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Res, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import type { Response } from "express";
 import { ProjectsService } from "./projects.service";
 import { CreateProjectSchema, PatchFieldValueSchema, type CreateProjectDto, type PatchFieldValueDto } from "./dto/project.dto";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
@@ -38,6 +39,14 @@ export class ProjectsController {
     if (!file) throw new BadRequestException('No file uploaded (expected multipart field "file").');
     if (!fieldId) throw new BadRequestException("fieldId is required.");
     return this.projects.uploadImage(id, fieldId, user.id, { buffer: file.buffer, mimetype: file.mimetype });
+  }
+
+  @Get(":id/assets/:assetId")
+  async uploadedImage(@Param("id") id: string, @Param("assetId") assetId: string, @CurrentUser() user: AuthenticatedUser, @Res() res: Response) {
+    const { bytes, mimeType } = await this.projects.getUpload(id, assetId, user.id);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    res.send(bytes);
   }
 
   @Put(":id/fields/:fieldId")

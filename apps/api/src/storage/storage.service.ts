@@ -14,6 +14,8 @@ export interface StoreAssetInput {
   hint?: string;
   width?: number;
   height?: number;
+  /** The project a USER_UPLOAD belongs to. */
+  projectId?: string;
 }
 
 @Injectable()
@@ -38,6 +40,7 @@ export class StorageService {
         sizeBytes: result.sizeBytes,
         width: input.width,
         height: input.height,
+        projectId: input.projectId,
       },
     });
     return { id: asset.id, storageKey: asset.storageKey };
