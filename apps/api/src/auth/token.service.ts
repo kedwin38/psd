@@ -43,7 +43,10 @@ export class TokenService {
 
   verifyAccessToken(token: string): AccessTokenClaims {
     try {
-      return this.jwt.verify<AccessTokenClaims>(token, { secret: this.config.get("JWT_ACCESS_SECRET") });
+      // Pending-MFA and step-up tokens share the signing secret; neither may stand in for a session.
+      const claims = this.jwt.verify<AccessTokenClaims & { mfaPending?: boolean; stepUp?: boolean }>(token, { secret: this.config.get("JWT_ACCESS_SECRET") });
+      if (claims.mfaPending || claims.stepUp) throw new Error("not an access token");
+      return claims;
     } catch {
       throw new UnauthorizedException("Invalid or expired access token.");
     }
@@ -71,7 +74,9 @@ export class TokenService {
 
   verifyStepUpToken(token: string): StepUpTokenClaims {
     try {
-      return this.jwt.verify<StepUpTokenClaims>(token, { secret: this.config.get("JWT_ACCESS_SECRET") });
+      const claims = this.jwt.verify<StepUpTokenClaims>(token, { secret: this.config.get("JWT_ACCESS_SECRET") });
+      if (claims.stepUp !== true) throw new Error("not a step-up token");
+      return claims;
     } catch {
       throw new UnauthorizedException("Invalid or expired step-up token.");
     }

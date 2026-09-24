@@ -101,6 +101,28 @@ describe("Auth & RBAC integration", () => {
       .set("x-step-up-token", stepUpToken);
     expect(res.status).toBe(200);
   });
+
+  it("doesn't take an access token as a step-up token", async () => {
+    const prisma = app.get(PrismaService);
+    const tokens = app.get(TokenService);
+    const admin = await prisma.user.findFirstOrThrow({ where: { email: "admin-rbac@example.com" } });
+    const accessToken = tokens.issueAccessToken({ id: admin.id, email: admin.email, roles: [RoleName.SUPER_ADMIN], organizationId: null });
+
+    const res = await request(app.getHttpServer()).get("/api/v1/auth/me").set("Authorization", `Bearer ${accessToken}`).set("x-step-up-token", accessToken);
+    expect(res.body.steppedUp).toBe(false);
+  });
+
+  it("doesn't take a password-only pending-MFA token, or a step-up token, as an access token", async () => {
+    const prisma = app.get(PrismaService);
+    const tokens = app.get(TokenService);
+    const admin = await prisma.user.findFirstOrThrow({ where: { email: "admin-rbac@example.com" } });
+
+    for (const token of [tokens.issuePendingMfaToken(admin.id), tokens.issueStepUpToken(admin.id)]) {
+      const res = await request(app.getHttpServer()).post("/api/v1/auth/totp/enroll/options").set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(401);
+    }
+    expect(await prisma.totpCredential.count({ where: { userId: admin.id } })).toBe(0);
+  });
 });
 
 describe("Refresh token rotation & reuse detection", () => {
