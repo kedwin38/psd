@@ -3,7 +3,7 @@ import { rasterAssetId, type LayerImageStore } from "@psd-studio/canvas-renderer
 import type { SceneNode, TextLayerNode } from "@psd-studio/scene-graph";
 import { ancestorIds, matchingIds } from "../canvas/sceneTree";
 
-const TYPE_LABEL: Record<SceneNode["type"], string> = {
+export const TYPE_LABEL: Record<SceneNode["type"], string> = {
   group: "Group",
   text: "Text",
   smartObject: "Smart Object",

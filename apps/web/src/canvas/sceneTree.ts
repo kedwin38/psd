@@ -42,8 +42,8 @@ export function matchingIds(nodes: readonly SceneNode[], query: string): Set<str
   return ids;
 }
 
-export function withNodeUpdate<T extends { root: SceneNode[] }>(graph: T, id: string, patch: Partial<Pick<SceneNode, "locked">>): T {
+export function withNodeUpdate<T extends { root: SceneNode[] }>(graph: T, id: string, patch: { locked?: boolean; imageAssetId?: string }): T {
   const update = (nodes: SceneNode[]): SceneNode[] =>
-    nodes.map((n) => (n.id === id ? { ...n, ...patch } : n.type === "group" ? { ...n, children: update(n.children) } : n));
+    nodes.map((n) => (n.id === id ? ({ ...n, ...patch } as SceneNode) : n.type === "group" ? { ...n, children: update(n.children) } : n));
   return { ...graph, root: update(graph.root) };
 }

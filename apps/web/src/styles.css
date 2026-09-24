@@ -174,12 +174,22 @@ tr:hover td { background: var(--surface-2); }
 .mapping-pane { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; overflow-y: auto; }
 
 .workspace-canvas-pane { position: relative; min-width: 0; min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-.scene-canvas { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.scene-canvas-stage { position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+.scene-canvas { position: absolute; inset: 0; overflow: hidden; }
+.scene-canvas-stage { position: absolute; box-shadow: 0 8px 30px rgba(0,0,0,0.4); pointer-events: none; }
 .scene-canvas-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.scene-canvas-overlay { touch-action: none; }
 .scene-canvas-chip {
   position: absolute; left: 12px; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(15,17,21,0.85); color: var(--text); font-size: 12px; pointer-events: none;
 }
 .scene-canvas-chip.hover { top: 12px; }
-.scene-canvas-chip.status { bottom: 12px; color: var(--text-dim); }
+.scene-canvas-chip.status { bottom: 12px; color: var(--text-dim); max-width: calc(100% - 300px); }
+.scene-canvas-chip.focus { top: 12px; border-color: var(--accent); white-space: normal; border-radius: 10px; }
+.scene-canvas-chip.notice { top: 44px; border-color: var(--danger); white-space: normal; border-radius: 10px; }
+.scene-canvas-chip.notice.ok { border-color: var(--success); }
+.scene-canvas-toolbar {
+  position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 2px;
+  padding: 3px; border-radius: 8px; border: 1px solid var(--border); background: rgba(15,17,21,0.85);
+}
+.scene-canvas-toolbar button { padding: 3px 9px; font-size: 12px; border-color: transparent; background: none; color: var(--text); }
+.scene-canvas-toolbar output { min-width: 48px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
