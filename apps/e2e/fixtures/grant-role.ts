@@ -21,6 +21,21 @@ export async function grantRole(email: string, role: string): Promise<void> {
   }
 }
 
+/** [layer path, field type, label] of every field on the template's published version, in the order end users see them. */
+export async function publishedFields(template: string): Promise<[string, string, string][]> {
+  const client = new Client({ connectionString: process.env.DATABASE_URL ?? "postgresql://psdstudio:psdstudio_dev_pw@localhost:5432/psdstudio" });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ layerPath: string; fieldType: string; label: string }>(
+      `SELECT f."layerPath", f."fieldType", f.label FROM template_fields f JOIN templates t ON t."currentVersionId" = f."templateVersionId" WHERE t.name = $1 ORDER BY f."order"`,
+      [template],
+    );
+    return rows.map((r) => [r.layerPath, r.fieldType, r.label]);
+  } finally {
+    await client.end();
+  }
+}
+
 export async function resetDatabase(): Promise<void> {
   const client = new Client({ connectionString: process.env.DATABASE_URL ?? "postgresql://psdstudio:psdstudio_dev_pw@localhost:5432/psdstudio" });
   await client.connect();

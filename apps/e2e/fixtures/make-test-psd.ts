@@ -8,9 +8,10 @@ import { initializeCanvas, writePsdBuffer, type Psd, type Layer } from "ag-psd";
  * watermark layer. This exists so the e2e test needs no checked-in binary
  * fixture and always matches the current ag-psd version. Text sits where its
  * type transform puts it (first baseline at tx, ty), as in Photoshop; written
- * without pixels, its layer bounds are empty.
+ * without pixels, its layer bounds are empty. Layers named in `locked` get
+ * Photoshop's position lock.
  */
-export function buildTestPsdBuffer(): Buffer {
+export function buildTestPsdBuffer({ locked = [] }: { locked?: string[] } = {}): Buffer {
   initializeCanvas(
     (w, h) => createCanvas(w, h) as unknown as HTMLCanvasElement,
     (w, h) => new ImageData(w, h) as unknown as globalThis.ImageData,
@@ -101,6 +102,13 @@ export function buildTestPsdBuffer(): Buffer {
       } as Layer,
     ],
   };
+
+  const lock = (layers: Layer[]) =>
+    layers.forEach((layer) => {
+      if (locked.includes(layer.name!)) layer.protected = { position: true };
+      lock(layer.children ?? []);
+    });
+  lock(psd.children!);
 
   return writePsdBuffer(psd, { generateThumbnail: false });
 }

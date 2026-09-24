@@ -15,6 +15,8 @@ const zoomLevel = async (page: Page) => Number((await page.getByLabel("Zoom leve
 const notice = (page: Page) => page.locator(".scene-canvas-chip.notice");
 const undoKey = (page: Page) => page.keyboard.press("ControlOrMeta+z");
 const redoKey = (page: Page) => page.keyboard.press("ControlOrMeta+Shift+z");
+// Undo is ignored while a step is still saving, so let each one land first.
+const saved = (page: Page) => expect(page.getByRole("status", { name: "Workspace save status" })).toHaveText("Saved");
 
 
 test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/redo", async ({ page, context }) => {
@@ -133,17 +135,11 @@ test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/r
     await expect.poll(() => pixelAt(page, 120, 120)).toEqual([0, 255, 0, 255]);
   });
 
-  await test.step("field mapping create/update/delete round-trip through undo/redo", async () => {
+  await test.step("fields follow locks: every unlocked layer is mapped; edits, removal and re-creation round-trip through undo/redo", async () => {
     const fieldBadge = row(page, "Full Name").locator(".badge", { hasText: "field" });
+    const lockButton = (action: "Lock" | "Unlock") => page.getByRole("button", { name: `${action} Full Name`, exact: true });
+    await expect(fieldBadge).toBeVisible();
     await row(page, "Full Name").click();
-    await page.getByRole("button", { name: "Create field" }).click();
-    await expect(fieldBadge).toBeVisible();
-
-    await undoKey(page);
-    await expect(fieldBadge).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Create field" })).toBeVisible();
-    await redoKey(page);
-    await expect(fieldBadge).toBeVisible();
     await expect(page.getByRole("button", { name: "Update field" })).toBeVisible();
 
     const labelInput = page.locator("form input").nth(0);
@@ -155,23 +151,44 @@ test("admin workspace: zoom/pan, text focus, drag-drop image replacement, undo/r
     await page.getByRole("button", { name: "Redo" }).click();
     await expect(labelInput).toHaveValue("Attendee name");
 
-    // Delete removes the selected layer's field for real; undo re-creates it through the API.
+    // Delete removes the selected layer's field for real and locks the layer; undo re-creates it through the API and unlocks it.
     await row(page, "Full Name").click();
     await page.keyboard.press("Delete");
     await expect(fieldBadge).toHaveCount(0);
+    await expect(lockButton("Unlock")).toBeVisible();
+    await expect(page.getByText("Locked, so it stays fixed design. Creating a field unlocks it.")).toBeVisible();
+    await saved(page);
+    await undoKey(page);
+    await expect(fieldBadge).toBeVisible();
+    await expect(lockButton("Lock")).toBeVisible();
+    await expect(labelInput).toHaveValue("Attendee name");
+
+    // Locking in the Layers panel drops the field; undo brings it back with its settings.
+    await lockButton("Lock").click();
+    await expect(fieldBadge).toHaveCount(0);
+    await saved(page);
     await undoKey(page);
     await expect(fieldBadge).toBeVisible();
     await expect(labelInput).toHaveValue("Attendee name");
+
+    // Creating a field on a locked layer unlocks it.
+    await lockButton("Lock").click();
+    await expect(page.getByRole("button", { name: "Create field" })).toBeVisible();
+    await page.getByRole("button", { name: "Create field" }).click();
+    await expect(fieldBadge).toBeVisible();
+    await expect(lockButton("Lock")).toBeVisible();
     await page.reload();
     await expect(fieldBadge).toBeVisible({ timeout: 15_000 });
+    await expect(lockButton("Lock")).toBeVisible();
   });
 
   await test.step("lock and visibility toggles are undoable too", async () => {
     await expect(page.locator(".scene-canvas-chip.status")).toHaveCount(0, { timeout: 15_000 });
-    await page.getByRole("button", { name: "Lock Background" }).click();
-    await expect(page.getByRole("button", { name: "Unlock Background" })).toBeVisible();
+    await page.getByRole("button", { name: "Lock Background", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Unlock Background", exact: true })).toBeVisible();
+    await saved(page);
     await undoKey(page);
-    await expect(page.getByRole("button", { name: "Lock Background" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Lock Background", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Hide Background" }).click();
     await expect.poll(async () => (await pixelAt(page, 300, 20))[3]).toBe(0);

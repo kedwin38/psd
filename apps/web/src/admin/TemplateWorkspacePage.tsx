@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import type { SceneGraph, SceneNode } from "@psd-studio/scene-graph";
+import { lockingNode, type SceneGraph, type SceneNode } from "@psd-studio/scene-graph";
 import { AlertCircle, AlertTriangle, Box, Check, ChevronRight, Eye, FileWarning, Image, MousePointerClick, PanelLeft, PanelRight, Redo2, RefreshCw, Rocket, Type, Undo2, X } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { stepUp } from "../lib/auth-api";
@@ -114,6 +114,8 @@ export function TemplateWorkspacePage() {
   );
   const layerImages = useLayerImages(`${templateId}/${versionId}`, sceneGraph, fetchLayerAsset);
 
+  // Until publish, the server keeps one field per unlocked layer, so field and lock edits change each other.
+  const followsLocks = !version?.publishedAt;
   const mappedNodeIds = useMemo(() => new Set(fields.map((f) => f.nodeId)), [fields]);
   const selectedNode = sceneGraph && selectedNodeId ? findNode(sceneGraph.root, selectedNodeId) : null;
   const existingField = fields.find((f) => f.nodeId === selectedNodeId);
@@ -154,11 +156,13 @@ export function TemplateWorkspacePage() {
 
   const createField = async (payload: Omit<TemplateField, "id" | "templateVersionId">) => {
     await api.post(`${base}/fields`, payload);
+    if (followsLocks) setSceneGraph((sg) => sg && withNodeUpdate(sg, payload.nodeId, { locked: false }));
     await reloadFields();
   };
 
   const deleteField = async (nodeId: string) => {
     await api.del(`${base}/fields/${fieldIdFor(nodeId)}`);
+    if (followsLocks) setSceneGraph((sg) => sg && withNodeUpdate(sg, nodeId, { locked: true }));
     await reloadFields();
   };
 
@@ -188,11 +192,21 @@ export function TemplateWorkspacePage() {
       setSceneGraph((sg) => sg && withNodeUpdate(sg, nodeId, { locked: !locked }));
       throw err;
     }
+    await reloadFields();
   };
 
   const toggleLocked = (node: SceneNode) => {
     const locked = !node.locked;
-    execute({ label: `${locked ? "lock" : "unlock"} “${node.name}”`, run: setLocked(node.id, locked), undo: setLocked(node.id, !locked) });
+    // Locking drops the layer's field; unlocking brings back a default one, so undo puts the old settings back on it.
+    const field = locked && followsLocks ? fieldsRef.current.find((f) => f.nodeId === node.id) : undefined;
+    const unlock = setLocked(node.id, !locked);
+    const undo = async () => {
+      await unlock();
+      if (!field) return;
+      await api.patch(`${base}/fields/${fieldIdFor(node.id)}`, { fieldType: field.fieldType, label: field.label, constraints: field.constraints });
+      await reloadFields();
+    };
+    execute({ label: `${locked ? "lock" : "unlock"} “${node.name}”`, run: setLocked(node.id, locked), undo });
   };
 
   const pointImageAt = async (nodeId: string, imageAssetId: string) => {
@@ -331,7 +345,7 @@ export function TemplateWorkspacePage() {
             <span className="dot">
               <MousePointerClick size={12} aria-hidden="true" />
             </span>
-            Map editable fields
+            Ready to publish
           </li>
         </ol>
         {failed ? <div className="error-box">{version.ingestError ?? "Ingestion failed."}</div> : <div className="progress-bar" aria-hidden="true" />}
@@ -425,9 +439,9 @@ export function TemplateWorkspacePage() {
             <button
               className="primary"
               onClick={publish}
-              disabled={saving || fields.length === 0}
+              disabled={saving}
               aria-label="Publish this version"
-              data-tip={fields.length === 0 ? "Map at least one field first" : "Make this version available to end users"}
+              data-tip="Make this version available to end users: every unlocked layer is editable"
               data-tip-align="end"
             >
               {publishing ? <Spinner /> : <Rocket size={15} aria-hidden="true" />}
@@ -498,6 +512,8 @@ export function TemplateWorkspacePage() {
                   key={`${selectedNode.id}:${fieldsRevision}`}
                   node={selectedNode}
                   existingField={existingField}
+                  followsLocks={followsLocks}
+                  lockedBy={sceneGraph ? lockingNode(sceneGraph, selectedNode.id) : undefined}
                   onSave={saveField}
                   onDelete={() => existingField && removeField(existingField)}
                   onClose={() => setSelectedNodeId(null)}
@@ -513,8 +529,8 @@ export function TemplateWorkspacePage() {
                 </div>
                 <div className="panel-body">
                   {sortedFields.length === 0 ? (
-                    <EmptyState icon={<MousePointerClick size={20} />} title="No fields mapped yet">
-                      Select a layer on the canvas or in the Layers panel to make it editable for end users.
+                    <EmptyState icon={<MousePointerClick size={20} />} title="No editable fields">
+                      Every layer is locked. Unlock a layer in the Layers panel, or select one and create a field, to make it editable for end users.
                     </EmptyState>
                   ) : (
                     <ul className="field-list">
@@ -540,7 +556,9 @@ export function TemplateWorkspacePage() {
                 </div>
                 <div className="panel-footer editor-tip">
                   <MousePointerClick size={14} aria-hidden="true" />
-                  <span>Click any layer to map it. Double-click text to inspect its runs; drop an image on a pixel or smart object layer to replace it.</span>
+                  <span>
+                    {followsLocks && "Every unlocked layer is an editable field; lock a layer to keep it fixed. "}Click any layer to fine-tune its field. Double-click text to inspect its runs; drop an image on a pixel or smart object layer to replace it.
+                  </span>
                 </div>
               </>
             )}

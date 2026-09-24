@@ -25,7 +25,7 @@ function allowedFieldTypesFor(node: SceneNode): FieldType[] {
     case "text":
       return ["TEXT", "VISIBILITY"];
     case "smartObject":
-      return ["SMART_OBJECT", "VISIBILITY"];
+      return ["IMAGE", "SMART_OBJECT", "VISIBILITY"];
     case "pixel":
     case "shape":
       return ["IMAGE", "VISIBILITY"];
@@ -58,6 +58,8 @@ function Switch({ checked, onChange, children, sub }: { checked: boolean; onChan
 export function FieldMappingForm({
   node,
   existingField,
+  followsLocks,
+  lockedBy,
   onSave,
   onDelete,
   onClose,
@@ -65,6 +67,10 @@ export function FieldMappingForm({
 }: {
   node: SceneNode;
   existingField: TemplateField | undefined;
+  /** Until publish, a layer is a field exactly when it's unlocked: creating a field unlocks it, removing one locks it. */
+  followsLocks: boolean;
+  /** The locked layer (this one or a group it's in) keeping it fixed design. */
+  lockedBy: SceneNode | undefined;
   onSave: (fieldType: FieldType, label: string, constraints: Record<string, unknown>) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -72,6 +78,7 @@ export function FieldMappingForm({
 }) {
   const id = useId();
   const options = allowedFieldTypesFor(node);
+  const lockedByGroup = followsLocks && !existingField && lockedBy !== undefined && lockedBy !== node;
   const [fieldType, setFieldType] = useState<FieldType>((existingField?.fieldType as FieldType) ?? options[0]!);
   const [label, setLabel] = useState(existingField?.label ?? node.name);
 
@@ -143,9 +150,16 @@ export function FieldMappingForm({
             {node.path}
           </p>
           <div className="status-line">
-            {existingField ? <span className="badge PUBLISHED">Mapped</span> : <span className="badge">Not mapped</span>}
+            {existingField ? <span className="badge PUBLISHED">Mapped</span> : <span className="badge">{followsLocks && lockedBy ? "Locked" : "Not mapped"}</span>}
             <span className="badge plain">{TYPE_LABEL[node.type]} layer</span>
           </div>
+          {followsLocks && !existingField && lockedBy && (
+            <p className="control-hint">
+              {lockedByGroup
+                ? `Inside the locked group “${lockedBy.name}”, so it stays fixed design. Unlock the group to make it editable.`
+                : "Locked, so it stays fixed design. Creating a field unlocks it."}
+            </p>
+          )}
         </div>
         <button type="button" className="icon-btn sm" aria-label="Deselect layer" data-tip="Deselect  Esc" data-tip-align="end" onClick={onClose}>
           <X size={16} aria-hidden="true" />
@@ -265,11 +279,20 @@ export function FieldMappingForm({
         )}
 
         <div className="inspector-actions">
-          <button type="submit" className="primary" disabled={saving}>
+          <button type="submit" className="primary" disabled={saving || lockedByGroup}>
             {existingField ? "Update field" : "Create field"}
           </button>
           {existingField && (
-            <button type="button" className="danger" onClick={onDelete} disabled={saving} aria-label="Remove field" data-tip="Remove field  Delete" data-tip-pos="top" data-tip-align="end">
+            <button
+              type="button"
+              className="danger"
+              onClick={onDelete}
+              disabled={saving}
+              aria-label="Remove field"
+              data-tip={followsLocks ? "Remove field and lock the layer  Delete" : "Remove field  Delete"}
+              data-tip-pos="top"
+              data-tip-align="end"
+            >
               <Trash2 size={15} aria-hidden="true" />
             </button>
           )}

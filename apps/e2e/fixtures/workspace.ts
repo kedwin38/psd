@@ -13,8 +13,8 @@ export const overlay = (page: Page) => page.locator(".scene-canvas-overlay");
 export const stage = (page: Page) => page.locator(".scene-canvas-stage");
 export const row = (page: Page, name: string) => page.locator(".layer-row", { has: page.locator(".layer-name", { hasText: new RegExp(`^${name}$`) }) });
 
-/** Registers a passkey admin, uploads the test PSD as a new template, and waits for the workspace canvas to finish loading. */
-export async function openWorkspace(page: Page, context: BrowserContext, { email, template }: { email: string; template: string }): Promise<void> {
+/** Registers a passkey user (the virtual authenticator also answers publish's step-up) and makes them a platform admin. */
+export async function registerAdmin(page: Page, context: BrowserContext, email: string): Promise<void> {
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable");
   await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -29,17 +29,38 @@ export async function openWorkspace(page: Page, context: BrowserContext, { email
   await grantRole(email, "SUPER_ADMIN");
   await page.reload();
   await expect(page.getByText("Template Library")).toBeVisible({ timeout: 10_000 });
+}
 
-  await page.goto("/admin/categories");
+/**
+ * In-app navigation: every full page load spends one session refresh, which the API rate-limits per IP, and the whole
+ * suite runs from one IP.
+ */
+export const navigate = (page: Page, link: "Templates" | "Categories" | "Template Library") => page.getByRole("navigation").getByRole("link", { name: link, exact: true }).click();
+
+/** Creates a template from the test PSD in one step (file, name, category) in its own new category; stays on the library. */
+export async function uploadTemplate(page: Page, template: string, psd = buildTestPsdBuffer()): Promise<void> {
+  await navigate(page, "Categories");
   await page.getByLabel("Name").fill(`${template} Category`);
   await page.getByRole("button", { name: "Create category" }).click();
-  await page.goto("/admin/templates");
+  await expect(page.locator("td", { hasText: `${template} Category` })).toBeVisible();
+  await navigate(page, "Template Library");
+  await expect(page.getByRole("heading", { name: "Template library" })).toBeVisible();
+  const psdPath = join(tmpdir(), `psd-studio-${template.replace(/\W+/g, "-")}-${Date.now()}.psd`);
+  writeFileSync(psdPath, psd);
+  await page.getByLabel("PSD file").setInputFiles(psdPath);
   await page.getByLabel("Name").fill(template);
   await page.getByLabel("Category").selectOption({ label: `${template} Category` });
   await page.getByRole("button", { name: "Create template" }).click();
-  const psdPath = join(tmpdir(), `psd-studio-${template.replace(/\W+/g, "-")}-${Date.now()}.psd`);
-  writeFileSync(psdPath, buildTestPsdBuffer());
-  await page.locator('input[type="file"]').setInputFiles(psdPath);
+  await expect(templateCard(page, template).locator("tbody tr")).toHaveCount(1);
+}
+
+export const templateCard = (page: Page, template: string) => page.locator(".card", { has: page.locator("h3", { hasText: template }) });
+
+/** Registers a passkey admin, uploads the test PSD as a new template, opens its workspace, and waits for the canvas to finish loading. */
+export async function openWorkspace(page: Page, context: BrowserContext, { email, template }: { email: string; template: string }): Promise<void> {
+  await registerAdmin(page, context, email);
+  await uploadTemplate(page, template);
+  await templateCard(page, template).locator("tbody button.link").click();
   await page.waitForURL(/\/admin\/templates\/.+\/versions\/.+/, { timeout: 15_000 });
   await expect(async () => {
     if ((await page.locator(".mapping-layout").count()) === 0) await page.getByRole("button", { name: "Refresh" }).click();

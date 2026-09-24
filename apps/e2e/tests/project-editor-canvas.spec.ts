@@ -43,22 +43,28 @@ function regionHash(page: Page, r: { left: number; top: number; right: number; b
   );
 }
 
-async function mapField(page: Page, layer: string, fieldType: string) {
+/** Tightens the rules on a layer's auto-created field through the mapping form. */
+async function tuneField(page: Page, layer: string, fieldType: string, rules: Record<string, number> = {}, required?: boolean) {
   await row(page, layer).click();
-  await page.locator(".mapping-pane form select").first().selectOption(fieldType);
-  await page.getByRole("button", { name: "Create field" }).click();
-  await expect(row(page, layer).locator(".badge", { hasText: "field" })).toBeVisible();
+  const form = page.locator(".mapping-pane form");
+  await form.locator("select").first().selectOption(fieldType);
+  for (const [label, value] of Object.entries(rules)) await form.getByLabel(label).fill(String(value));
+  if (required !== undefined) await form.getByRole("checkbox", { name: /Required/ }).setChecked(required);
+  await page.getByRole("button", { name: "Update field" }).click();
+  await expect(page.getByRole("button", { name: "Undo" })).toHaveAttribute("data-tip", new RegExp(`edit field “${layer}”`));
 }
 
 test("end-user editor: live canvas with in-place editing that matches the export", async ({ page, context }) => {
   test.setTimeout(240_000);
 
-  await test.step("admin maps fields (leaving Title as fixed design) and publishes; the end user starts a project", async () => {
+  await test.step("admin locks Title as fixed design, tightens a few fields' rules and publishes; the end user starts a project", async () => {
     await openWorkspace(page, context, { email: "editor-canvas@example.com", template: "Live Badge" });
-    await mapField(page, "Full Name", "TEXT");
-    await mapField(page, "Photo", "SMART_OBJECT");
-    await mapField(page, "Watermark", "VISIBILITY");
-    await mapField(page, "Background", "IMAGE");
+    await page.getByRole("button", { name: "Lock Title" }).click();
+    await expect(row(page, "Title").locator(".badge", { hasText: "field" })).toHaveCount(0);
+    await tuneField(page, "Full Name", "TEXT", { "Max length": 60 }, true);
+    await tuneField(page, "Photo", "SMART_OBJECT", { "Min width": 200, "Min height": 200 });
+    await tuneField(page, "Watermark", "VISIBILITY");
+    await expect(row(page, "Background").locator(".badge", { hasText: "field" })).toBeVisible();
     await page.getByRole("button", { name: "Publish this version" }).click();
     await page.waitForURL("/admin/templates", { timeout: 15_000 });
     await page.goto("/");
@@ -76,6 +82,7 @@ test("end-user editor: live canvas with in-place editing that matches the export
   });
 
   await test.step("only mapped layers are interactive; clicking one selects and reveals its sidebar field", async () => {
+    await expect(block(page, "Title")).toHaveCount(0);
     // Title is fixed design: hovering it highlights the background photo field beneath, never Title itself.
     const title = await scenePoint(page, 60, 320);
     await page.mouse.move(title.x, title.y);

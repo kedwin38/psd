@@ -12,7 +12,7 @@ import { pixelAt } from "../fixtures/workspace";
  * virtual WebAuthn authenticator standing in for a hardware passkey:
  * register -> enroll passkey -> (bootstrap admin out-of-band) -> create a
  * category/template -> upload a real PSD -> wait for background ingestion
- * -> map fields by clicking layers -> publish (a fresh step-up passkey
+ * -> fine-tune fields by clicking layers -> publish (a fresh step-up passkey
  * ceremony) -> as an end user, start a project -> edit text/photo/visibility
  * fields with live preview -> export -> download the rendered file.
  *
@@ -58,14 +58,16 @@ test("golden path: register, publish a template, and export a customized badge",
   await expect(page.locator("td", { hasText: "Employee Badges" })).toBeVisible();
 
   await page.goto("/admin/templates");
+  const psdPath = join(tmpdir(), `psd-studio-e2e-${Date.now()}.psd`);
+  writeFileSync(psdPath, buildTestPsdBuffer());
+  await page.getByLabel("PSD file").setInputFiles(psdPath);
   await page.getByLabel("Name").fill("Standard Badge");
   await page.getByLabel("Category").selectOption({ label: "Employee Badges" });
   await page.getByRole("button", { name: "Create template" }).click();
   await expect(page.locator("h3", { hasText: "Standard Badge" })).toBeVisible();
 
-  const psdPath = join(tmpdir(), `psd-studio-e2e-${Date.now()}.psd`);
-  writeFileSync(psdPath, buildTestPsdBuffer());
-  await page.locator('input[type="file"]').setInputFiles(psdPath);
+  // Mapping fields by hand is optional now, but still works for admins who want tighter rules.
+  await page.locator("tbody button.link").click();
   await page.waitForURL(/\/admin\/templates\/.+\/versions\/.+/, { timeout: 15_000 });
 
   await expect(async () => {
@@ -94,9 +96,9 @@ test("golden path: register, publish a template, and export a customized badge",
   await page.locator(".template-card", { hasText: "Standard Badge" }).click();
   await page.waitForURL(/\/projects\/.+/, { timeout: 15_000 });
 
-  const textareas = page.locator("textarea");
-  await textareas.nth(0).fill("Alice Example");
-  await textareas.nth(1).fill("Principal Engineer");
+  const field = (label: string) => page.getByRole("group", { name: label, exact: true });
+  await field("Full Name").locator("textarea").fill("Alice Example");
+  await field("Title").locator("textarea").fill("Principal Engineer");
 
   const photoCanvas = createCanvas(200, 200);
   const pctx = photoCanvas.getContext("2d");
@@ -104,12 +106,12 @@ test("golden path: register, publish a template, and export a customized badge",
   pctx.fillRect(0, 0, 200, 200);
   const photoPath = join(tmpdir(), `psd-studio-e2e-photo-${Date.now()}.png`);
   writeFileSync(photoPath, photoCanvas.toBuffer("image/png"));
-  await page.locator('input[type="file"]').first().setInputFiles(photoPath);
+  await field("Photo").locator('input[type="file"]').setInputFiles(photoPath);
   // Live preview reflects every edit — spec's central preview/export parity bet: the uploaded photo is on the canvas.
   await expect(page.getByRole("img", { name: "Template canvas" })).toBeVisible({ timeout: 5_000 });
   await expect.poll(() => pixelAt(page, 120, 120)).toEqual([34, 170, 85, 255]);
 
-  await page.locator('input[type="checkbox"]').first().check();
+  await field("Watermark").getByRole("checkbox").check();
   await expect(page.getByRole("status", { name: "Save status" })).toHaveText("All changes saved", { timeout: 10_000 });
 
   await page.getByRole("button", { name: /^Export$/ }).click();

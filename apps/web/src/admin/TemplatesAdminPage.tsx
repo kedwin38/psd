@@ -1,19 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Rocket } from "lucide-react";
 import { api, ApiError } from "../lib/api";
-import type { Category, Template } from "../lib/types";
+import { stepUp } from "../lib/auth-api";
+import type { Category, Template, TemplateVersion } from "../lib/types";
+import { Spinner } from "../components/workspace";
+
+const INGEST_POLL_MS = 2000;
 
 interface AdminTemplate extends Template {
-  versions: { id: string; versionNo: number; ingestStatus: string }[];
+  versions: (Pick<TemplateVersion, "id" | "versionNo" | "ingestStatus" | "publishedAt"> & { _count: { fields: number } })[];
 }
+
+const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ? (err.detail ?? err.title) : fallback);
 
 export function TemplatesAdminPage() {
   const [templates, setTemplates] = useState<AdminTemplate[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [name, setName] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [psd, setPsd] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [publishing, setPublishing] = useState<string | null>(null);
+  const psdInput = useRef<HTMLInputElement>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const navigate = useNavigate();
 
@@ -27,18 +37,36 @@ export function TemplatesAdminPage() {
     load();
   }, []);
 
+  // PSDs parse in the background: keep checking until every upload is ready (or has failed).
+  const ingesting = templates.some((t) => t.versions.some((v) => v.ingestStatus === "PENDING" || v.ingestStatus === "PARSING"));
+  useEffect(() => {
+    if (!ingesting) return;
+    const timer = setInterval(() => void load(), INGEST_POLL_MS);
+    return () => clearInterval(timer);
+  }, [ingesting]);
+
+  const upload = (templateId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.upload(`/templates/${templateId}/versions`, form);
+  };
+
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!psd) return;
     setError(null);
     setBusy(true);
     try {
-      await api.post("/templates", { name, categoryId, visibilityScope: "PUBLIC" });
+      const template = await api.post<Template>("/templates", { name, categoryId, visibilityScope: "PUBLIC" });
       setName("");
-      await load();
+      setPsd(null);
+      if (psdInput.current) psdInput.current.value = "";
+      await upload(template.id, psd);
     } catch (err) {
-      setError(err instanceof ApiError ? (err.detail ?? err.title) : "Could not create template.");
+      setError(errorText(err, "Could not create template."));
     } finally {
       setBusy(false);
+      await load();
     }
   };
 
@@ -49,15 +77,27 @@ export function TemplatesAdminPage() {
     setError(null);
     setBusy(true);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const version = await api.upload<{ id: string }>(`/templates/${templateId}/versions`, form);
-      navigate(`/admin/templates/${templateId}/versions/${version.id}`);
+      await upload(templateId, file);
+      await load();
     } catch (err) {
-      setError(err instanceof ApiError ? (err.detail ?? err.title) : "Upload failed.");
+      setError(errorText(err, "Upload failed."));
     } finally {
       setBusy(false);
       if (input) input.value = "";
+    }
+  };
+
+  const publish = async (templateId: string, versionId: string) => {
+    setError(null);
+    setPublishing(versionId);
+    try {
+      const stepUpToken = await stepUp();
+      await api.post(`/templates/${templateId}/versions/${versionId}/publish`, {}, stepUpToken);
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Publish failed."));
+    } finally {
+      setPublishing(null);
     }
   };
 
@@ -65,7 +105,7 @@ export function TemplatesAdminPage() {
     <div className="grid-2">
       <div>
         <h1>Template library</h1>
-        <p className="subtitle">Upload a PSD, map its fields, and publish (spec §10).</p>
+        <p className="subtitle">Upload a PSD and publish it: every unlocked layer becomes an editable field. Lock layers in the workspace to keep them fixed.</p>
         {error && <div className="error-box">{error}</div>}
         <div className="stack">
           {templates.map((t) => (
@@ -99,25 +139,46 @@ export function TemplatesAdminPage() {
                     <tr>
                       <th>Version</th>
                       <th>Ingestion</th>
+                      <th>Editable fields</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {t.versions.map((v) => (
-                      <tr key={v.id}>
-                        <td>
-                          #{v.versionNo} {t.currentVersionId === v.id && <span className="badge PUBLISHED">current</span>}
-                        </td>
-                        <td>
-                          <span className={`badge ${v.ingestStatus}`}>{v.ingestStatus}</span>
-                        </td>
-                        <td>
-                          <button className="link" onClick={() => navigate(`/admin/templates/${t.id}/versions/${v.id}`)}>
-                            {v.ingestStatus === "READY" ? "Map fields →" : "View →"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {t.versions.map((v) => {
+                      const ready = v.ingestStatus === "READY";
+                      const live = t.status === "PUBLISHED" && t.currentVersionId === v.id;
+                      return (
+                        <tr key={v.id}>
+                          <td>
+                            #{v.versionNo} {live && <span className="badge PUBLISHED">current</span>}
+                          </td>
+                          <td>
+                            <span className={`badge ${v.ingestStatus}`}>{v.ingestStatus}</span>
+                          </td>
+                          <td>{ready ? v._count.fields : "—"}</td>
+                          <td>
+                            <div className="row">
+                              {ready && !live && (
+                                <button
+                                  className="primary sm"
+                                  onClick={() => publish(t.id, v.id)}
+                                  disabled={publishing !== null}
+                                  aria-label={`Publish ${t.name} version ${v.versionNo}`}
+                                  title="Every unlocked layer becomes an editable field"
+                                >
+                                  {publishing === v.id ? <Spinner /> : <Rocket size={14} aria-hidden="true" />}
+                                  Publish
+                                </button>
+                              )}
+                              {!ready && v.ingestStatus !== "FAILED" && <Spinner label="Processing PSD" />}
+                              <button className="link" onClick={() => navigate(`/admin/templates/${t.id}/versions/${v.id}`)}>
+                                {ready ? "Customize fields →" : "View →"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -129,6 +190,10 @@ export function TemplatesAdminPage() {
       <div className="card" style={{ height: "fit-content" }}>
         <h2>New template</h2>
         <form onSubmit={create} className="stack">
+          <div>
+            <label htmlFor="template-psd">PSD file</label>
+            <input id="template-psd" ref={psdInput} type="file" accept=".psd,.psb" onChange={(e) => setPsd(e.target.files?.[0] ?? null)} required />
+          </div>
           <div>
             <label htmlFor="template-name">Name</label>
             <input id="template-name" value={name} onChange={(e) => setName(e.target.value)} required />
@@ -147,7 +212,11 @@ export function TemplatesAdminPage() {
           <button type="submit" className="primary" disabled={busy || categories.length === 0}>
             Create template
           </button>
-          {categories.length === 0 && <p className="hint">Create a category first.</p>}
+          {categories.length === 0 ? (
+            <p className="hint">Create a category first.</p>
+          ) : (
+            <p className="hint">Publish it from the library as soon as it's processed, or customize its fields first.</p>
+          )}
         </form>
       </div>
     </div>
