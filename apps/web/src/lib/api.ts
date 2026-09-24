@@ -1,10 +1,27 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3000/api/v1";
 
+/** Share of an access token's lifetime after which it's renewed ahead of expiry. */
+const PROACTIVE_REFRESH_AT = 0.8;
+
 let accessToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+let refreshing: Promise<string | null> | null = null;
+
+function lifetimeMs(token: string): number | null {
+  try {
+    const { iat, exp } = JSON.parse(atob(token.split(".")[1]!.replace(/-/g, "+").replace(/_/g, "/"))) as { iat?: number; exp?: number };
+    return iat && exp ? (exp - iat) * 1000 : null;
+  } catch {
+    return null;
+  }
+}
 
 export function setAccessToken(token: string | null): void {
   accessToken = token;
+  clearTimeout(refreshTimer);
+  const lifetime = token && lifetimeMs(token);
+  if (lifetime) refreshTimer = setTimeout(() => tryRefresh().catch(() => null), lifetime * PROACTIVE_REFRESH_AT);
 }
 export function getAccessToken(): string | null {
   return accessToken;
@@ -57,20 +74,33 @@ async function rawRequest(path: string, options: RequestOptions): Promise<Respon
   });
 }
 
-/** Tries the refresh cookie once to mint a fresh access token; used both at boot and on 401. */
-export async function tryRefresh(): Promise<string | null> {
+async function refresh(): Promise<string | null> {
   const res = await fetch(`${API_BASE}/auth/refresh`, { method: "POST", credentials: "include" });
   if (!res.ok) return null;
   const data = (await res.json()) as { accessToken: string };
-  accessToken = data.accessToken;
+  setAccessToken(data.accessToken);
   return accessToken;
 }
 
+/**
+ * Mints a fresh access token from the refresh cookie; used at boot, on 401 and ahead of expiry. Concurrent callers
+ * share one request: the refresh token rotates on use, and the API treats a second use of the old one as a replay and
+ * revokes the whole session.
+ */
+export function tryRefresh(): Promise<string | null> {
+  refreshing ??= refresh().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
 async function send(path: string, options: RequestOptions): Promise<Response> {
+  const sentWith = accessToken;
   let res = await rawRequest(path, options);
 
   if (res.status === 401 && !options.skipAuthRetry && path !== "/auth/refresh") {
-    const refreshed = await tryRefresh();
+    // Someone else already renewed the token while this request was out: just retry with it.
+    const refreshed = accessToken !== sentWith ? accessToken : await tryRefresh();
     if (refreshed) {
       res = await rawRequest(path, options);
     } else {
