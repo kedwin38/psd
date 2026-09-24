@@ -1,4 +1,4 @@
-import type { FieldOverride, GroupNode, Rect, SceneGraph, SceneNode, SmartObjectLayerNode, TextLayerNode, TextRun } from "@psd-studio/scene-graph";
+import type { FieldOverride, GroupNode, Rect, SceneGraph, SceneNode, TextLayerNode, TextRun } from "@psd-studio/scene-graph";
 import { COMPOSITE_OPERATION } from "./blend.js";
 import { clipUnits, createDomBuffer, type BufferFactory, type ClipUnit, type Ctx2D } from "./buffer.js";
 import { cssFont, rgbaToCss } from "./text.js";
@@ -77,8 +77,6 @@ class Painter {
         return;
       case "pixel":
       case "shape":
-        this.paintRaster(ctx, node, node.imageAssetId);
-        return;
       case "smartObject": {
         const override = this.overrides.get(node.id);
         if (override?.type === "image") this.paintReplacement(ctx, node, override);
@@ -118,7 +116,7 @@ class Painter {
     ctx.restore();
   }
 
-  private paintReplacement(ctx: Ctx2D, node: SmartObjectLayerNode, override: Extract<FieldOverride, { type: "image" }>): void {
+  private paintReplacement(ctx: Ctx2D, node: SceneNode, override: Extract<FieldOverride, { type: "image" }>): void {
     const image = this.options.images(override.imageAssetId);
     if (!image) return;
     const { width: iw, height: ih } = imageSize(image);

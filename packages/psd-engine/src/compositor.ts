@@ -122,10 +122,9 @@ export class SceneCompositor {
       case "text":
         await this.paintText(ctx, node, scale, overridesByNode, warnings);
         return;
+      // IMAGE fields map to pixel/shape layers and SMART_OBJECT fields to smart objects; both take the upload the same way.
       case "pixel":
       case "shape":
-        await this.paintRaster(ctx, node, node.imageAssetId, node.bounds, scale, node.opacity, node.blendMode, warnings);
-        return;
       case "smartObject": {
         const override = overridesByNode.get(node.id);
         if (override?.type === "image") {
@@ -249,7 +248,7 @@ export class SceneCompositor {
 
   private async paintReplacementImage(
     ctx: Ctx2D,
-    node: Extract<SceneNode, { type: "smartObject" }>,
+    node: SceneNode,
     override: Extract<FieldOverride, { type: "image" }>,
     scale: number,
     warnings: RenderWarning[],

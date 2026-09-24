@@ -1,6 +1,6 @@
 import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
-import type { Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
+import type { FieldOverride, Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
 import { measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
 
@@ -26,12 +26,12 @@ function graphOf(root: SceneNode[]): SceneGraph {
   return { formatVersion: 1, width: 100, height: 100, dpi: 72, colorMode: "rgb", root };
 }
 
-async function renderBoth(graph: SceneGraph, assets: Record<string, Buffer>, visibility?: Map<string, boolean>) {
+async function renderBoth(graph: SceneGraph, assets: Record<string, Buffer>, { visibility, overrides }: { visibility?: Map<string, boolean>; overrides?: FieldOverride[] } = {}) {
   const images = new Map<string, Image>();
   for (const [id, png] of Object.entries(assets)) images.set(id, await loadImage(png));
   const client = napiBuffer(graph.width, graph.height);
-  renderScene(client, graph, { scale: 1, images: (id) => images.get(id) as unknown as CanvasImageSource, visibility, createBuffer: napiBuffer });
-  const server = await new SceneCompositor({ getImage: async (id) => assets[id]! }).render(graph);
+  renderScene(client, graph, { scale: 1, images: (id) => images.get(id) as unknown as CanvasImageSource, visibility, overrides, createBuffer: napiBuffer });
+  const server = await new SceneCompositor({ getImage: async (id) => assets[id]! }).render(graph, { overrides });
   const serverCtx = napiBuffer(graph.width, graph.height);
   serverCtx.drawImage((await loadImage(server.png)) as unknown as CanvasImageSource, 0, 0);
   const at = (ctx: Ctx2D) => (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data];
@@ -71,10 +71,29 @@ describe("renderScene", () => {
 
   it("lets view-only visibility hide authored-visible layers and reveal authored-hidden ones", async () => {
     const graph = graphOf([pixel("bg", { left: 0, top: 0, right: 100, bottom: 100 }), pixel("hidden", { left: 0, top: 0, right: 100, bottom: 100 }, { visible: false })]);
-    const { client } = await renderBoth(graph, assets, new Map([["hidden", true]]));
+    const { client } = await renderBoth(graph, assets, { visibility: new Map([["hidden", true]]) });
     expect(client(50, 50)).toEqual([0, 255, 0, 255]);
-    const { client: hiddenBg } = await renderBoth(graph, assets, new Map([["bg", false]]));
+    const { client: hiddenBg } = await renderBoth(graph, assets, { visibility: new Map([["bg", false]]) });
     expect(hiddenBg(50, 50)[3]).toBe(0);
+  });
+
+  it("matches the server for field overrides, including an upload cropped into a pixel layer", async () => {
+    const upload = createCanvas(80, 40);
+    const uctx = upload.getContext("2d");
+    uctx.fillStyle = "#ff0000";
+    uctx.fillRect(0, 0, 40, 40);
+    uctx.fillStyle = "#0000ff";
+    uctx.fillRect(40, 0, 40, 40);
+    const graph = graphOf([pixel("bg", { left: 0, top: 0, right: 100, bottom: 100 }), pixel("hidden", { left: 0, top: 0, right: 100, bottom: 100 }, { visible: false }), pixel("red", { left: 10, top: 10, right: 50, bottom: 50 })]);
+    const overrides: FieldOverride[] = [
+      { type: "image", nodeId: "red", imageAssetId: "upload", crop: { x: 0.25, y: 0, width: 0.5, height: 1 } },
+      { type: "visibility", nodeId: "hidden", visible: true },
+    ];
+    const { client, server } = await renderBoth(graph, { ...assets, upload: upload.toBuffer("image/png") }, { overrides });
+    for (const [x, y] of [[15, 30], [45, 30], [5, 5]] as const) expect(client(x, y)).toEqual(server(x, y));
+    expect(client(15, 30)).toEqual([255, 0, 0, 255]);
+    expect(client(45, 30)).toEqual([0, 0, 255, 255]);
+    expect(client(5, 5)).toEqual([0, 255, 0, 255]);
   });
 
   it("measures text extents for layers stored with empty bounds", () => {

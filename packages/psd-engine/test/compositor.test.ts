@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { idFromPath, type SceneGraph } from "@psd-studio/scene-graph";
 import { SceneCompositor, type AssetSource } from "../src/compositor.js";
-import { solidPng } from "./fixtures/solidPng.js";
+import { sideBySidePng, solidPng } from "./fixtures/solidPng.js";
 import { readPixel } from "./pngPixels.js";
 
 class FakeAssets implements AssetSource {
@@ -285,6 +285,41 @@ describe("SceneCompositor", () => {
       overrides: [{ type: "image", nodeId: "photo", imageAssetId: "uploaded", crop: { x: 0, y: 0, width: 1, height: 1 } }],
     });
     expect(readPixel(result.png, 10, 10)).toEqual({ r: 0, g: 255, b: 0, a: 255 });
+  });
+
+  it("renders an IMAGE field's upload into a pixel layer, honoring the crop window", async () => {
+    const graph: SceneGraph = {
+      formatVersion: 1,
+      width: 20,
+      height: 20,
+      dpi: 72,
+      colorMode: "rgb",
+      root: [
+        {
+          type: "pixel",
+          id: "photo",
+          path: "Photo",
+          name: "Photo",
+          visible: true,
+          opacity: 1,
+          blendMode: "normal",
+          clipping: false,
+          bounds: { left: 0, top: 0, right: 20, bottom: 20 },
+          imageAssetId: "placeholder",
+        },
+      ],
+    };
+    const assets = new FakeAssets(
+      new Map([
+        ["placeholder", solidPng(20, 20, "#888888")],
+        ["uploaded", sideBySidePng(40, 20, "#ff0000", "#0000ff")],
+      ]),
+    );
+    const result = await new SceneCompositor(assets).render(graph, {
+      overrides: [{ type: "image", nodeId: "photo", imageAssetId: "uploaded", crop: { x: 0.5, y: 0, width: 0.5, height: 1 } }],
+    });
+    expect(readPixel(result.png, 2, 10)).toEqual({ r: 0, g: 0, b: 255, a: 255 });
+    expect(readPixel(result.png, 18, 10)).toEqual({ r: 0, g: 0, b: 255, a: 255 });
   });
 
   it("renders replaced text with the field's own text and inherited styling", async () => {
