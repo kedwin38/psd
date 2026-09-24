@@ -12,6 +12,7 @@ import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { INGESTION_QUEUE, type IngestionJobData } from "../queue/queue.constants";
 import { AssetOwnerType, IngestStatus } from "../generated/prisma";
+import { syncFieldsWithLocks } from "../templates/field-sync";
 
 function connectionFromUrl(url: string) {
   const parsed = new URL(url);
@@ -151,22 +152,26 @@ export class IngestionProcessorService implements OnModuleInit, OnModuleDestroy 
       const { sceneGraph, warnings } = await this.runSandboxed(psdFilePath, scratchDir);
       await this.resolveSandboxAssets(sceneGraph, scratchDir);
 
-      await this.prisma.templateVersion.update({
-        where: { id: templateVersionId },
-        data: {
-          sceneGraph: sceneGraph as object,
-          nativeDpi: sceneGraph.dpi,
-          colorProfile: sceneGraph.colorMode,
-          ingestStatus: IngestStatus.READY,
-          ingestWarnings: warnings as unknown as object,
-          ingestError: null,
-        },
+      // Ready means publishable as-is: every unlocked layer is already an editable field.
+      const sync = await this.prisma.$transaction(async (tx) => {
+        await tx.templateVersion.update({
+          where: { id: templateVersionId },
+          data: {
+            sceneGraph: sceneGraph as object,
+            nativeDpi: sceneGraph.dpi,
+            colorProfile: sceneGraph.colorMode,
+            ingestStatus: IngestStatus.READY,
+            ingestWarnings: warnings as unknown as object,
+            ingestError: null,
+          },
+        });
+        return syncFieldsWithLocks(tx, templateVersionId, sceneGraph);
       });
       await this.audit.record({
         action: "template.version.ingested",
         resourceType: "TemplateVersion",
         resourceId: templateVersionId,
-        metadata: { warningCount: warnings.length },
+        metadata: { warningCount: warnings.length, fieldsCreated: sync.created, fieldsRemoved: sync.removed },
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

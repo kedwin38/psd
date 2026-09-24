@@ -1,8 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Queue } from "bullmq";
 import { Inject } from "@nestjs/common";
 import sharp from "sharp";
-import { findNodeById, referencedAssetIds, type PixelLayerNode, type SceneGraph, type SceneNode, type SmartObjectLayerNode } from "@psd-studio/scene-graph";
+import { findNodeById, lockingNode, referencedAssetIds, type PixelLayerNode, type SceneGraph, type SceneNode, type SmartObjectLayerNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
@@ -10,9 +10,10 @@ import { StorageService } from "../storage/storage.service";
 import { DbBackedAssetSource } from "../rendering/db-asset-source";
 import { INGESTION_QUEUE_TOKEN } from "../queue/queue.module";
 import type { IngestionJobData } from "../queue/queue.constants";
-import { AssetOwnerType, IngestStatus, TemplateStatus } from "../generated/prisma";
+import { AssetOwnerType, IngestStatus, TemplateStatus, type Prisma, type TemplateVersion } from "../generated/prisma";
 import { sniffImageMime } from "../common/image-sniff";
 import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, UpdateTemplateDto } from "./dto/template.dto";
+import { syncFieldsWithLocks, type FieldSyncResult } from "./field-sync";
 
 const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
 
@@ -24,6 +25,14 @@ const MAX_LAYER_IMAGE_PIXELS = 100_000_000;
 function rasterImageAssetId(node: SceneNode): string | null {
   return node.type === "pixel" || node.type === "shape" || node.type === "smartObject" ? node.imageAssetId : null;
 }
+
+function nodeIn(sceneGraph: SceneGraph, nodeId: string): SceneNode {
+  const node = findNodeById(sceneGraph, nodeId);
+  if (!node) throw new NotFoundException(`Node ${nodeId} does not exist in this template version's scene graph.`);
+  return node;
+}
+
+const syncMetadata = (sync: FieldSyncResult | null) => (sync ? { fieldsCreated: sync.created, fieldsRemoved: sync.removed } : {});
 
 function assertImageReplaceable(node: SceneNode, publishedAt: Date | null): asserts node is PixelLayerNode | SmartObjectLayerNode {
   // Projects pin a version, so swapping art under a published one would silently change users' designs and exports.
@@ -44,7 +53,10 @@ export class TemplatesService {
 
   async listAllForAdmin() {
     return this.prisma.template.findMany({
-      include: { currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } }, versions: { select: { id: true, versionNo: true, ingestStatus: true }, orderBy: { versionNo: "desc" } } },
+      include: {
+        currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } },
+        versions: { select: { id: true, versionNo: true, ingestStatus: true, publishedAt: true, _count: { select: { fields: true } } }, orderBy: { versionNo: "desc" } },
+      },
       orderBy: { updatedAt: "desc" },
     });
   }
@@ -156,21 +168,23 @@ export class TemplatesService {
       // Only layer rasters: never let a template point at an end user's upload or an export.
       if (!asset || asset.ownerType !== AssetOwnerType.TEMPLATE_LAYER) throw new BadRequestException("Unknown layer image asset.");
     }
-    const { node, result: previousImageAssetId } = await this.mutateNode(versionId, nodeId, (target, version) => {
+    const { node, previousImageAssetId, sync } = await this.withVersion(versionId, async (tx, version, sceneGraph) => {
+      const target = nodeIn(sceneGraph, nodeId);
       const previous = rasterImageAssetId(target);
       if (dto.imageAssetId !== undefined) {
         assertImageReplaceable(target, version.publishedAt);
         target.imageAssetId = dto.imageAssetId;
       }
       if (dto.locked !== undefined) target.locked = dto.locked;
-      return previous;
+      const locksChanged = dto.locked !== undefined && !version.publishedAt;
+      return { node: target, previousImageAssetId: previous, sync: locksChanged ? await syncFieldsWithLocks(tx, versionId, sceneGraph) : null };
     });
     await this.audit.record({
       actorId,
       action: "template.node.updated",
       resourceType: "TemplateVersion",
       resourceId: versionId,
-      metadata: { templateId, nodeId, ...dto, ...(dto.imageAssetId !== undefined ? { previousImageAssetId } : {}) },
+      metadata: { templateId, nodeId, ...dto, ...(dto.imageAssetId !== undefined ? { previousImageAssetId } : {}), ...syncMetadata(sync) },
     });
     return { id: node.id, locked: node.locked ?? false, imageAssetId: rasterImageAssetId(node) };
   }
@@ -204,7 +218,8 @@ export class TemplatesService {
     const png = await sharp(file.buffer).rotate().resize(width, height, { fit: "cover" }).png().toBuffer();
     const asset = await this.storage.storeAsset({ data: png, mimeType: "image/png", ownerType: AssetOwnerType.TEMPLATE_LAYER, hint: `layer_${nodeId}`, width, height });
 
-    const { result: previousImageAssetId } = await this.mutateNode(versionId, nodeId, (target, current) => {
+    const previousImageAssetId = await this.withVersion(versionId, async (_tx, current, graph) => {
+      const target = nodeIn(graph, nodeId);
       assertImageReplaceable(target, current.publishedAt);
       const previous = target.imageAssetId;
       target.imageAssetId = asset.id;
@@ -220,20 +235,19 @@ export class TemplatesService {
     return { id: nodeId, imageAssetId: asset.id, previousImageAssetId, width, height };
   }
 
-  private async mutateNode<T>(versionId: string, nodeId: string, mutate: (node: SceneNode, version: { publishedAt: Date | null }) => T) {
+  /** Runs `work` on a ready version's scene graph and fields in one transaction, then saves the graph it may have edited. */
+  private async withVersion<T>(versionId: string, work: (tx: Prisma.TransactionClient, version: TemplateVersion, sceneGraph: SceneGraph) => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
-      // Row lock so concurrent edits on the same version can't overwrite each other's JSON edits.
+      // Row lock so concurrent edits on the same version can't overwrite each other's JSON or field edits.
       await tx.$queryRaw`SELECT id FROM template_versions WHERE id = ${versionId} FOR UPDATE`;
       const version = await tx.templateVersion.findUniqueOrThrow({ where: { id: versionId } });
       if (version.ingestStatus !== IngestStatus.READY || !version.sceneGraph) {
         throw new BadRequestException(`Template version is not ready (status: ${version.ingestStatus}).`);
       }
       const sceneGraph = version.sceneGraph as unknown as SceneGraph;
-      const target = findNodeById(sceneGraph, nodeId);
-      if (!target) throw new NotFoundException(`Node ${nodeId} does not exist in this template version's scene graph.`);
-      const result = mutate(target, version);
+      const result = await work(tx, version, sceneGraph);
       await tx.templateVersion.update({ where: { id: versionId }, data: { sceneGraph: sceneGraph as object } });
-      return { node: target, result };
+      return result;
     });
   }
 
@@ -251,23 +265,34 @@ export class TemplatesService {
     return this.prisma.templateField.findMany({ where: { templateVersionId: versionId }, orderBy: { order: "asc" } });
   }
 
+  // Until a version is published, a layer is a field exactly when it's unlocked: creating a field unlocks its layer.
   async createField(templateId: string, versionId: string, dto: CreateFieldDto, actorId: string) {
-    const sceneGraph = await this.getSceneGraph(templateId, versionId);
-    if (!findNodeById(sceneGraph, dto.nodeId)) {
-      throw new BadRequestException(`Node ${dto.nodeId} does not exist in this template version's scene graph.`);
-    }
-    const field = await this.prisma.templateField.create({
-      data: {
-        templateVersionId: versionId,
-        nodeId: dto.nodeId,
-        layerPath: dto.layerPath,
-        fieldType: dto.fieldType,
-        label: dto.label,
-        order: dto.order,
-        constraints: dto.constraints,
-      },
+    await this.getSceneGraph(templateId, versionId);
+    const { field, sync } = await this.withVersion(versionId, async (tx, version, sceneGraph) => {
+      const node = findNodeById(sceneGraph, dto.nodeId);
+      if (!node) throw new BadRequestException(`Node ${dto.nodeId} does not exist in this template version's scene graph.`);
+      if (await tx.templateField.findUnique({ where: { templateVersionId_nodeId: { templateVersionId: versionId, nodeId: dto.nodeId } } })) {
+        throw new ConflictException(`“${node.name}” is already a field; update it instead.`);
+      }
+      if (!version.publishedAt) {
+        const lock = lockingNode(sceneGraph, node.id);
+        if (lock && lock !== node) throw new BadRequestException(`“${node.name}” is inside the locked group “${lock.name}”; unlock the group to make it editable.`);
+        node.locked = false;
+      }
+      const field = await tx.templateField.create({
+        data: {
+          templateVersionId: versionId,
+          nodeId: dto.nodeId,
+          layerPath: dto.layerPath,
+          fieldType: dto.fieldType,
+          label: dto.label,
+          order: dto.order,
+          constraints: dto.constraints,
+        },
+      });
+      return { field, sync: version.publishedAt ? null : await syncFieldsWithLocks(tx, versionId, sceneGraph) };
     });
-    await this.audit.record({ actorId, action: "template.field.created", resourceType: "TemplateField", resourceId: field.id, metadata: { templateId, versionId } });
+    await this.audit.record({ actorId, action: "template.field.created", resourceType: "TemplateField", resourceId: field.id, metadata: { templateId, versionId, ...syncMetadata(sync) } });
     return field;
   }
 
@@ -280,33 +305,40 @@ export class TemplatesService {
     return field;
   }
 
+  /** Removing a field from an unpublished version locks its layer, so the next sync doesn't bring the field back. */
   async removeField(templateId: string, versionId: string, fieldId: string, actorId: string) {
     await this.getVersion(templateId, versionId);
     const existing = await this.prisma.templateField.findFirst({ where: { id: fieldId, templateVersionId: versionId } });
     if (!existing) throw new NotFoundException("Field not found.");
-    await this.prisma.templateField.delete({ where: { id: fieldId } });
-    await this.audit.record({ actorId, action: "template.field.deleted", resourceType: "TemplateField", resourceId: fieldId });
+    const sync = await this.withVersion(versionId, async (tx, version, sceneGraph) => {
+      await tx.templateField.delete({ where: { id: fieldId } });
+      if (version.publishedAt) return null;
+      const node = findNodeById(sceneGraph, existing.nodeId);
+      if (node) node.locked = true;
+      return syncFieldsWithLocks(tx, versionId, sceneGraph);
+    });
+    await this.audit.record({ actorId, action: "template.field.deleted", resourceType: "TemplateField", resourceId: fieldId, metadata: { templateId, versionId, nodeId: existing.nodeId, ...syncMetadata(sync) } });
   }
 
+  /** Publishing a version for the first time first syncs its fields with its lock state: every unlocked layer ships editable. */
   async publish(templateId: string, versionId: string, actorId: string) {
     const version = await this.getVersion(templateId, versionId);
     if (version.ingestStatus !== IngestStatus.READY) {
       throw new BadRequestException(`Cannot publish: ingestion status is "${version.ingestStatus}".`);
     }
-    const fields = await this.prisma.templateField.findMany({ where: { templateVersionId: versionId } });
-    if (fields.length === 0) {
-      throw new BadRequestException("Cannot publish a template version with no editable fields mapped.");
-    }
 
-    await this.prisma.$transaction([
-      this.prisma.templateVersion.update({ where: { id: versionId }, data: { publishedAt: new Date() } }),
-      this.prisma.template.update({
-        where: { id: templateId },
-        data: { currentVersionId: versionId, status: TemplateStatus.PUBLISHED },
-      }),
-    ]);
+    const { fieldCount, sync } = await this.withVersion(versionId, async (tx, current, sceneGraph) => {
+      const sync = current.publishedAt ? null : await syncFieldsWithLocks(tx, versionId, sceneGraph);
+      const fieldCount = await tx.templateField.count({ where: { templateVersionId: versionId } });
+      if (fieldCount === 0) {
+        throw new BadRequestException("Every layer is locked, so end users would have nothing to edit. Unlock at least one layer before publishing.");
+      }
+      await tx.templateVersion.update({ where: { id: versionId }, data: { publishedAt: new Date() } });
+      await tx.template.update({ where: { id: templateId }, data: { currentVersionId: versionId, status: TemplateStatus.PUBLISHED } });
+      return { fieldCount, sync };
+    });
 
-    await this.audit.record({ actorId, action: "template.published", resourceType: "TemplateVersion", resourceId: versionId, metadata: { templateId, fieldCount: fields.length } });
+    await this.audit.record({ actorId, action: "template.published", resourceType: "TemplateVersion", resourceId: versionId, metadata: { templateId, fieldCount, ...syncMetadata(sync) } });
     return this.get(templateId);
   }
 }
