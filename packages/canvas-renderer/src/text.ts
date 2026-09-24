@@ -1,4 +1,5 @@
 import type { Rgba, TextRun } from "@psd-studio/scene-graph";
+import type { Ctx2D } from "./buffer.js";
 
 const STYLE_WEIGHTS: [RegExp, number][] = [
   [/thin|hairline/i, 100],
@@ -17,13 +18,38 @@ const STYLE_WEIGHTS: [RegExp, number][] = [
  * Diverges from server: SceneCompositor sets only the quoted PostScript name with no fallback family.
  */
 export function cssFont(run: Pick<TextRun, "fontName" | "bold" | "italic">, sizePx: number): string {
-  const postScript = run.fontName.replace(/["\\]/g, "");
-  const [familyPart = postScript, stylePart = ""] = postScript.split("-", 2);
-  const family = familyPart.replace(/([a-z])([A-Z])/g, "$1 $2");
+  const { stack, stylePart } = fontFamilies(run.fontName);
   const weight = run.bold ? 700 : (STYLE_WEIGHTS.find(([re]) => re.test(stylePart))?.[1] ?? 400);
   const italic = run.italic || /italic|oblique/i.test(stylePart);
-  const stack = family === postScript ? `"${postScript}"` : `"${postScript}", "${family}"`;
   return `${italic ? "italic " : ""}${weight} ${sizePx}px ${stack}, sans-serif`;
+}
+
+function fontFamilies(fontName: string): { stack: string; stylePart: string } {
+  const postScript = fontName.replace(/["\\]/g, "");
+  const [familyPart = postScript, stylePart = ""] = postScript.split("-", 2);
+  const family = familyPart.replace(/([a-z])([A-Z])/g, "$1 $2");
+  return { stack: family === postScript ? `"${postScript}"` : `"${postScript}", "${family}"`, stylePart };
+}
+
+const PROBE_TEXT = "mmmmmmmmmmlli1WQ@#";
+
+/**
+ * Whether this environment has the font cssFont asks for, i.e. whether text in it renders in the
+ * real face rather than the generic fallback: a missing family measures exactly like the generic.
+ */
+export function isFontAvailable(ctx: Ctx2D, fontName: string): boolean {
+  const { stack } = fontFamilies(fontName);
+  ctx.save();
+  try {
+    return ["monospace", "serif"].some((generic) => {
+      ctx.font = `72px ${generic}`;
+      const fallback = ctx.measureText(PROBE_TEXT).width;
+      ctx.font = `72px ${stack}, ${generic}`;
+      return ctx.measureText(PROBE_TEXT).width !== fallback;
+    });
+  } finally {
+    ctx.restore();
+  }
 }
 
 export function rgbaToCss({ r, g, b, a }: Rgba): string {

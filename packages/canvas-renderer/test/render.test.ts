@@ -1,8 +1,8 @@
-import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
+import { GlobalFonts, createCanvas, loadImage, type Image } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
 import type { FieldOverride, Rect, SceneGraph, SceneNode } from "@psd-studio/scene-graph";
 import { SceneCompositor } from "@psd-studio/psd-engine";
-import { measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
+import { exportDivergences, fieldTextFit, isFontAvailable, measureTextBounds, renderScene, textRunBoxes, type Ctx2D } from "../src/index.js";
 
 const napiBuffer = (w: number, h: number) => createCanvas(w, h).getContext("2d") as unknown as Ctx2D;
 
@@ -154,5 +154,41 @@ describe("renderScene", () => {
     const { client } = await renderBoth(graph, assets);
     expect(client(30, 30)).toEqual([0, 0, 255, 255]);
     expect(client(60, 60)[3]).toBe(0);
+    expect(exportDivergences(graph, graph.root[1]!)).toEqual(["top-level-clipping"]);
+    expect(exportDivergences(graph, graph.root[0]!)).toEqual([]);
+  });
+
+  it("reports how replacement text wraps against the layer's box at export scale", () => {
+    const text = {
+      ...base("t", { left: 0, top: 0, right: 200, bottom: 30 }),
+      type: "text",
+      alignment: "left",
+      boxMode: "point",
+      runs: [{ text: "Jane", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    } as Extract<SceneNode, { type: "text" }>;
+    const ctx = napiBuffer(1, 1);
+    expect(fieldTextFit(ctx, text, "Short name")).toEqual({ lines: 1, capacity: 1, overflowsWidth: false });
+    expect(fieldTextFit(ctx, text, "A considerably longer name that has to wrap onto more lines")).toMatchObject({ capacity: 1, overflowsWidth: false });
+    expect(fieldTextFit(ctx, text, "A considerably longer name that has to wrap onto more lines").lines).toBeGreaterThan(1);
+    expect(fieldTextFit(ctx, text, "Supercalifragilisticexpialidocious-and-then-some").overflowsWidth).toBe(true);
+    expect(fieldTextFit(ctx, { ...text, bounds: { left: 0, top: 0, right: 200, bottom: 80 } }, "x").capacity).toBe(3);
+  });
+
+  it("flags text styling the server compositor doesn't apply yet", () => {
+    const text = {
+      ...base("t", { left: 0, top: 0, right: 200, bottom: 30 }, { opacity: 0.5 }),
+      type: "text",
+      alignment: "left",
+      boxMode: "point",
+      runs: [{ text: "Jane", fontName: "Arial", fontSize: 20, tracking: 50, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    } as SceneNode;
+    expect(exportDivergences(graphOf([text]), text)).toEqual(["text-tracking", "text-opacity"]);
+  });
+
+  it("tells a missing font from an installed one by measuring against generic fallbacks", () => {
+    const ctx = napiBuffer(1, 1);
+    expect(isFontAvailable(ctx, "NoSuchFontAnywhere-Bold")).toBe(false);
+    const installed = GlobalFonts.families.map((f) => f.family).find((f) => !/\s/.test(f) && !/mono|serif/i.test(f));
+    if (installed) expect(isFontAvailable(ctx, installed)).toBe(true);
   });
 });

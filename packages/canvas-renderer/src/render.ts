@@ -150,14 +150,11 @@ class Painter {
 
     if (override?.type === "text") {
       const style = node.runs[0]!;
-      const sizePx = style.fontSize * scale;
-      ctx.font = cssFont(style, sizePx);
       ctx.fillStyle = rgbaToCss(style.color);
-      setTracking(ctx, style.tracking, sizePx);
+      const lines = wrapFieldText(ctx, node, override.text, scale);
       const lineHeight = (style.leadingPt ?? style.fontSize * 1.2) * scale;
-      const boxWidth = (node.bounds.right - node.bounds.left) * scale;
-      let y = node.bounds.top * scale + this.oy + sizePx;
-      for (const line of wrapText(ctx, override.text, boxWidth || sizePx * 20)) {
+      let y = node.bounds.top * scale + this.oy + style.fontSize * scale;
+      for (const line of lines) {
         drawAlignedLine(ctx, line, node.alignment, node.bounds.left * scale + this.ox, node.bounds.right * scale + this.ox, y);
         y += lineHeight;
       }
@@ -218,7 +215,42 @@ export function textRunBoxes(ctx: Ctx2D, node: TextLayerNode): TextRunBox[] {
   return boxes;
 }
 
-type RunSegmentVisitor = (runIndex: number, run: TextRun, x: number, baseline: number, metrics: TextMetrics) => void;
+/**
+ * Sets ctx to a text field's style (its first run, as both compositors use for replacement text) at
+ * scale and greedy-wraps the text to the layer's width; leaves the style set for drawing.
+ */
+function wrapFieldText(ctx: Ctx2D, node: TextLayerNode, text: string, scale: number): string[] {
+  const style = node.runs[0]!;
+  const sizePx = style.fontSize * scale;
+  ctx.font = cssFont(style, sizePx);
+  setTracking(ctx, style.tracking, sizePx);
+  const boxWidth = (node.bounds.right - node.bounds.left) * scale;
+  return wrapText(ctx, text, boxWidth || sizePx * 20);
+}
+
+export interface FieldTextFit {
+  lines: number;
+  /** Lines that fit in the layer's stored height; replacement text past that paints below the box. */
+  capacity: number;
+  /** A single word wider than the box can't wrap and paints past its right edge. */
+  overflowsWidth: boolean;
+}
+
+/** How replacement text for a text field lays out at export scale (1 scene px = 1 output px). */
+export function fieldTextFit(ctx: Ctx2D, node: TextLayerNode, text: string): FieldTextFit {
+  ctx.save();
+  const lines = wrapFieldText(ctx, node, text, 1);
+  const boxWidth = node.bounds.right - node.bounds.left;
+  const overflowsWidth = boxWidth > 0 && lines.some((line) => ctx.measureText(line).width > boxWidth + 0.5);
+  ctx.restore();
+  const style = node.runs[0]!;
+  const leading = style.leadingPt ?? style.fontSize * 1.2;
+  const room = node.bounds.bottom - node.bounds.top - style.fontSize * 1.25;
+  const capacity = node.bounds.bottom > node.bounds.top ? Math.max(1, 1 + Math.floor(room / leading + 0.05)) : Infinity;
+  return { lines: lines.length, capacity, overflowsWidth };
+}
+
+type RunSegmentVisitor =(runIndex: number, run: TextRun, x: number, baseline: number, metrics: TextMetrics) => void;
 
 function layoutRuns(ctx: Ctx2D, node: TextLayerNode, visit: RunSegmentVisitor): void {
   const { left, top } = node.bounds;
