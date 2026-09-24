@@ -1,7 +1,23 @@
-import type { FieldOverride, GroupNode, Rect, SceneGraph, SceneNode, TextLayerNode, TextRun } from "@psd-studio/scene-graph";
+import {
+  authoredWrapWidth,
+  fieldWrapWidth,
+  layoutText,
+  lineHeight,
+  lineWidth,
+  textFrame,
+  transformRect,
+  type FieldOverride,
+  type GroupNode,
+  type Rect,
+  type SceneGraph,
+  type SceneNode,
+  type TextLayerNode,
+  type TextLayout,
+  type TextRun,
+} from "@psd-studio/scene-graph";
 import { COMPOSITE_OPERATION } from "./blend.js";
 import { clipUnits, createDomBuffer, type BufferFactory, type ClipUnit, type Ctx2D } from "./buffer.js";
-import { cssFont, rgbaToCss } from "./text.js";
+import { rgbaToCss, setRunFont, textMeasure } from "./text.js";
 
 export type ImageLookup = (assetId: string) => CanvasImageSource | undefined;
 
@@ -140,62 +156,61 @@ class Painter {
   }
 
   private paintText(ctx: Ctx2D, node: TextLayerNode): void {
-    const { scale } = this.options;
     const override = this.overrides.get(node.id);
+    const { transform: t, lines, runs } = layoutFor(ctx, node, override?.type === "text" ? override.text : undefined);
+    const { scale } = this.options;
     ctx.save();
     // Diverges from server: SceneCompositor ignores a text layer's own opacity and blend mode.
     ctx.globalAlpha = node.opacity;
     ctx.globalCompositeOperation = COMPOSITE_OPERATION[node.blendMode];
     ctx.textBaseline = "alphabetic";
-
-    if (override?.type === "text") {
-      const style = node.runs[0]!;
-      ctx.fillStyle = rgbaToCss(style.color);
-      const lines = wrapFieldText(ctx, node, override.text, scale);
-      const lineHeight = (style.leadingPt ?? style.fontSize * 1.2) * scale;
-      let y = node.bounds.top * scale + this.oy + style.fontSize * scale;
-      for (const line of lines) {
-        drawAlignedLine(ctx, line, node.alignment, node.bounds.left * scale + this.ox, node.bounds.right * scale + this.ox, y);
-        y += lineHeight;
-      }
-      ctx.restore();
-      return;
-    }
-
-    const left = node.bounds.left * scale + this.ox;
-    let x = left;
-    let y = node.bounds.top * scale + this.oy + node.runs[0]!.fontSize * scale;
-    for (const run of node.runs) {
-      const sizePx = run.fontSize * scale;
-      ctx.font = cssFont(run, sizePx);
-      ctx.fillStyle = rgbaToCss(run.color);
-      setTracking(ctx, run.tracking, sizePx);
-      const segments = run.text.split(/\r\n|\r|\n/);
-      for (let i = 0; i < segments.length; i++) {
-        if (i > 0) {
-          x = left;
-          y += (run.leadingPt ?? run.fontSize * 1.2) * scale;
-        }
-        ctx.fillText(segments[i]!, x, y);
-        x += ctx.measureText(segments[i]!).width;
+    ctx.transform(scale, 0, 0, scale, this.ox, this.oy);
+    ctx.transform(t.m00, t.m10, t.m01, t.m11, t.m02, t.m12);
+    for (const line of lines) {
+      for (const segment of line.segments) {
+        const run = runs[segment.run]!;
+        setRunFont(ctx, run);
+        ctx.fillStyle = rgbaToCss(run.color);
+        ctx.fillText(segment.text, segment.x, line.baseline);
       }
     }
     ctx.restore();
   }
 }
 
+type RunsLayout = TextLayout & { runs: readonly TextRun[] };
+
+/** The authored runs as paintText lays them out, or with text given, that replacement text in the first run's style. */
+function layoutFor(ctx: Ctx2D, node: TextLayerNode, text?: string): RunsLayout {
+  ctx.save();
+  try {
+    const measure = textMeasure(ctx);
+    const runs = text === undefined ? node.runs : [{ ...node.runs[0]!, text }];
+    return { ...layoutText(node, runs, measure, text === undefined ? authoredWrapWidth(node) : fieldWrapWidth(node, measure)), runs };
+  } finally {
+    ctx.restore();
+  }
+}
+
+/** Scene-space extents of laid-out lines, each spanning a font size above its baseline to a quarter below. */
+function layoutExtent(node: TextLayerNode, { transform, lines, runs }: RunsLayout): Rect {
+  const box = textFrame(node).box;
+  const local = lines.map((line): Rect => {
+    const size = Math.max(runs[0]!.fontSize, ...line.segments.map((s) => runs[s.run]!.fontSize));
+    const left = line.segments[0]?.x ?? box?.left ?? 0;
+    return { left, top: line.baseline - size, right: left + lineWidth(line), bottom: line.baseline + size * 0.25 };
+  });
+  return transformRect(transform, {
+    left: Math.min(...local.map((r) => r.left)),
+    top: Math.min(...local.map((r) => r.top)),
+    right: Math.max(...local.map((r) => r.right)),
+    bottom: Math.max(...local.map((r) => r.bottom)),
+  });
+}
+
 /** Scene-space extents of authored text exactly as paintText lays it out (for PSDs that store empty text-layer bounds). */
 export function measureTextBounds(ctx: Ctx2D, node: TextLayerNode): Rect {
-  const { left, top } = node.bounds;
-  let right = left;
-  let lastBaseline = top;
-  let descent = 0;
-  layoutRuns(ctx, node, (_runIndex, run, x, baseline, metrics) => {
-    right = Math.max(right, x + metrics.width);
-    lastBaseline = baseline;
-    descent = Math.max(descent, run.fontSize * 0.25);
-  });
-  return { left, top, right, bottom: lastBaseline + descent };
+  return layoutExtent(node, layoutFor(ctx, node));
 }
 
 export interface TextRunBox {
@@ -207,92 +222,49 @@ export interface TextRunBox {
 
 /** Per-run glyph boxes of authored text, laid out exactly as paintText draws it; whitespace-only segments get no box. */
 export function textRunBoxes(ctx: Ctx2D, node: TextLayerNode): TextRunBox[] {
+  const { transform, lines, runs } = layoutFor(ctx, node);
   const boxes: TextRunBox[] = [];
-  layoutRuns(ctx, node, (run, _style, x, baseline, m) => {
-    const rect = { left: x - m.actualBoundingBoxLeft, top: baseline - m.actualBoundingBoxAscent, right: x + m.actualBoundingBoxRight, bottom: baseline + m.actualBoundingBoxDescent };
-    if (rect.right > rect.left && rect.bottom > rect.top) boxes.push({ run, rect });
-  });
+  ctx.save();
+  for (const line of lines) {
+    for (const s of line.segments) {
+      setRunFont(ctx, runs[s.run]!);
+      const m = ctx.measureText(s.text);
+      const rect = { left: s.x - m.actualBoundingBoxLeft, top: line.baseline - m.actualBoundingBoxAscent, right: s.x + m.actualBoundingBoxRight, bottom: line.baseline + m.actualBoundingBoxDescent };
+      if (rect.right > rect.left && rect.bottom > rect.top) boxes.push({ run: s.run, rect: transformRect(transform, rect) });
+    }
+  }
+  ctx.restore();
   return boxes;
-}
-
-/**
- * Sets ctx to a text field's style (its first run, as both compositors use for replacement text) at
- * scale and greedy-wraps the text to the layer's width; leaves the style set for drawing.
- */
-function wrapFieldText(ctx: Ctx2D, node: TextLayerNode, text: string, scale: number): string[] {
-  const style = node.runs[0]!;
-  const sizePx = style.fontSize * scale;
-  ctx.font = cssFont(style, sizePx);
-  setTracking(ctx, style.tracking, sizePx);
-  const boxWidth = (node.bounds.right - node.bounds.left) * scale;
-  return wrapText(ctx, text, boxWidth || sizePx * 20);
 }
 
 export interface FieldTextFit {
   lines: number;
-  /** Lines that fit in the layer's stored height; replacement text past that paints below the box. */
+  /** Lines the layout has room for: those fitting a paragraph box, or point text's authored line count; more paint past it. */
   capacity: number;
   /** A single word wider than the box can't wrap and paints past its right edge. */
   overflowsWidth: boolean;
 }
 
-/** How replacement text for a text field lays out at export scale (1 scene px = 1 output px). */
+/** How replacement text for a text field lays out, as the export draws it. */
 export function fieldTextFit(ctx: Ctx2D, node: TextLayerNode, text: string): FieldTextFit {
   ctx.save();
-  const lines = wrapFieldText(ctx, node, text, 1);
-  const boxWidth = node.bounds.right - node.bounds.left;
-  const overflowsWidth = boxWidth > 0 && lines.some((line) => ctx.measureText(line).width > boxWidth + 0.5);
+  const measure = textMeasure(ctx);
+  const width = fieldWrapWidth(node, measure);
+  const { lines } = layoutText(node, [{ ...node.runs[0]!, text }], measure, width);
+  const authoredLines = layoutText(node, node.runs, measure, authoredWrapWidth(node)).lines.length;
   ctx.restore();
+  const overflowsWidth = lines.some((line) => lineWidth(line) > width + 0.5);
+  const box = textFrame(node).box;
+  if (!box) return { lines: lines.length, capacity: authoredLines, overflowsWidth };
   const style = node.runs[0]!;
-  const leading = style.leadingPt ?? style.fontSize * 1.2;
-  const room = node.bounds.bottom - node.bounds.top - style.fontSize * 1.25;
-  const capacity = node.bounds.bottom > node.bounds.top ? Math.max(1, 1 + Math.floor(room / leading + 0.05)) : Infinity;
+  const room = box.bottom - box.top - style.fontSize * 1.25;
+  const capacity = box.bottom > box.top ? Math.max(1, 1 + Math.floor(room / lineHeight(style) + 0.05)) : Infinity;
   return { lines: lines.length, capacity, overflowsWidth };
 }
 
 /** Scene-space extents of replacement text exactly as paintText lays it out (for text layers stored with empty bounds). */
 export function measureFieldTextBounds(ctx: Ctx2D, node: TextLayerNode, text: string): Rect {
-  ctx.save();
-  const widths = wrapFieldText(ctx, node, text, 1).map((line) => ctx.measureText(line).width);
-  ctx.restore();
-  const { left, top, right } = node.bounds;
-  const style = node.runs[0]!;
-  const xs = widths.map((width) => alignedX(node.alignment, left, right, width));
-  const leading = style.leadingPt ?? style.fontSize * 1.2;
-  return {
-    left: Math.min(left, ...xs),
-    top,
-    right: Math.max(left, ...xs.map((x, i) => x + widths[i]!)),
-    bottom: top + style.fontSize + (widths.length - 1) * leading + style.fontSize * 0.25,
-  };
-}
-
-type RunSegmentVisitor = (runIndex: number, run: TextRun, x: number, baseline: number, metrics: TextMetrics) => void;
-
-function layoutRuns(ctx: Ctx2D, node: TextLayerNode, visit: RunSegmentVisitor): void {
-  const { left, top } = node.bounds;
-  let x = left;
-  let baseline = top + node.runs[0]!.fontSize;
-  ctx.save();
-  node.runs.forEach((run, runIndex) => {
-    ctx.font = cssFont(run, run.fontSize);
-    setTracking(ctx, run.tracking, run.fontSize);
-    run.text.split(/\r\n|\r|\n/).forEach((segment, i) => {
-      if (i > 0) {
-        x = left;
-        baseline += run.leadingPt ?? run.fontSize * 1.2;
-      }
-      const metrics = ctx.measureText(segment);
-      visit(runIndex, run, x, baseline, metrics);
-      x += metrics.width;
-    });
-  });
-  ctx.restore();
-}
-
-// Diverges from server: SceneCompositor ignores tracking; PSD tracking is in 1/1000 em.
-function setTracking(ctx: Ctx2D, tracking: number | undefined, sizePx: number): void {
-  if ("letterSpacing" in ctx) ctx.letterSpacing = `${((tracking ?? 0) / 1000) * sizePx}px`;
+  return layoutExtent(node, layoutFor(ctx, node, text));
 }
 
 function imageSize(image: CanvasImageSource): { width: number; height: number } {
@@ -302,37 +274,4 @@ function imageSize(image: CanvasImageSource): { width: number; height: number } 
   if (typeof image.width === "number") return { width: image.width, height: image.height as number };
   const svg = image as SVGImageElement;
   return { width: svg.width.baseVal.value, height: svg.height.baseVal.value };
-}
-
-function wrapText(ctx: Ctx2D, text: string, maxWidthPx: number): string[] {
-  const lines: string[] = [];
-  for (const paragraph of text.split(/\r\n|\r|\n/)) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      lines.push("");
-      continue;
-    }
-    let current = words[0]!;
-    for (const word of words.slice(1)) {
-      const candidate = `${current} ${word}`;
-      if (ctx.measureText(candidate).width <= maxWidthPx) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        current = word;
-      }
-    }
-    lines.push(current);
-  }
-  return lines;
-}
-
-function alignedX(alignment: TextLayerNode["alignment"], left: number, right: number, width: number): number {
-  if (alignment === "center") return left + (right - left - width) / 2;
-  if (alignment === "right") return right - width;
-  return left;
-}
-
-function drawAlignedLine(ctx: Ctx2D, line: string, alignment: TextLayerNode["alignment"], left: number, right: number, y: number): void {
-  ctx.fillText(line, alignedX(alignment, left, right, ctx.measureText(line).width), y);
 }

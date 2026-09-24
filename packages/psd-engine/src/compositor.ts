@@ -1,5 +1,17 @@
 import { createCanvas, loadImage, type Image } from "@napi-rs/canvas";
-import type { SceneGraph, SceneNode, GroupNode, FieldOverride, Rgba } from "@psd-studio/scene-graph";
+import {
+  authoredWrapWidth,
+  fieldWrapWidth,
+  layoutText,
+  type SceneGraph,
+  type SceneNode,
+  type GroupNode,
+  type FieldOverride,
+  type Rgba,
+  type TextLayerNode,
+  type TextMeasure,
+  type TextRun,
+} from "@psd-studio/scene-graph";
 import { rgbaToCss } from "./color.js";
 
 /** Loosely-typed napi-rs canvas 2D context so we avoid depending on lib.dom. */
@@ -29,43 +41,11 @@ export interface RenderResult {
   warnings: RenderWarning[];
 }
 
-function rectWidth(n: SceneNode) {
-  return Math.max(0, n.bounds.right - n.bounds.left);
-}
-function rectHeight(n: SceneNode) {
-  return Math.max(0, n.bounds.bottom - n.bounds.top);
-}
-
-/** Greedy word-wrap used when rendering user-entered text (original template runs render verbatim). */
-function wrapText(ctx: Ctx2D, text: string, maxWidthPx: number): string[] {
-  const paragraphs = text.split(/\r\n|\r|\n/);
-  const lines: string[] = [];
-  for (const paragraph of paragraphs) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      lines.push("");
-      continue;
-    }
-    let current = words[0]!;
-    for (let i = 1; i < words.length; i++) {
-      const word = words[i]!;
-      const candidate = `${current} ${word}`;
-      if (ctx.measureText(candidate).width <= maxWidthPx || current.length === 0) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        current = word;
-      }
-    }
-    lines.push(current);
-  }
-  return lines;
-}
-
-function fontString(fontName: string, fontSizePx: number, bold?: boolean, italic?: boolean): string {
-  const weight = bold ? "bold " : "";
-  const style = italic ? "italic " : "";
-  return `${style}${weight}${fontSizePx}px "${fontName}"`;
+/** A run's font at its local size; the type frame's transform scales it into the scene. */
+function fontString(run: TextRun): string {
+  const weight = run.bold ? "bold " : "";
+  const style = run.italic ? "italic " : "";
+  return `${style}${weight}${run.fontSize}px "${run.fontName}"`;
 }
 
 export class SceneCompositor {
@@ -120,7 +100,7 @@ export class SceneCompositor {
         await this.paintGroup(ctx, node, scale, overridesByNode, warnings);
         return;
       case "text":
-        await this.paintText(ctx, node, scale, overridesByNode, warnings);
+        this.paintText(ctx, node, scale, overridesByNode);
         return;
       // IMAGE fields map to pixel/shape layers and SMART_OBJECT fields to smart objects; both take the upload the same way.
       case "pixel":
@@ -284,67 +264,34 @@ export class SceneCompositor {
     ctx.restore();
   }
 
-  private async paintText(
-    ctx: Ctx2D,
-    node: Extract<SceneNode, { type: "text" }>,
-    scale: number,
-    overridesByNode: Map<string, FieldOverride>,
-    warnings: RenderWarning[],
-  ): Promise<void> {
+  /** Lays text out with the same shared layout as the client renderer, then draws it through the layer's type frame. */
+  private paintText(ctx: Ctx2D, node: TextLayerNode, scale: number, overridesByNode: Map<string, FieldOverride>): void {
     const override = overridesByNode.get(node.id);
-    const boxWidth = rectWidth(node) * scale;
+    const runs = override?.type === "text" ? [{ ...node.runs[0]!, text: override.text }] : node.runs;
     ctx.save();
+    const measure: TextMeasure = {
+      width(text, run) {
+        ctx.font = fontString(run);
+        return ctx.measureText(text).width;
+      },
+      capHeight(run) {
+        ctx.font = fontString(run);
+        return ctx.measureText("H").actualBoundingBoxAscent;
+      },
+    };
+    const { transform: t, lines } = layoutText(node, runs, measure, override?.type === "text" ? fieldWrapWidth(node, measure) : authoredWrapWidth(node));
     ctx.textBaseline = "alphabetic";
-
-    if (override?.type === "text") {
-      const style = node.runs[0];
-      if (!style) {
-        warnings.push({ nodeId: node.id, message: "Text field has no base style to inherit; skipped." });
-        ctx.restore();
-        return;
-      }
-      const fontSizePx = style.fontSize * scale;
-      ctx.font = fontString(style.fontName, fontSizePx, style.bold, style.italic);
-      ctx.fillStyle = rgbaToCss(style.color);
-      const lineHeight = (style.leadingPt ?? style.fontSize * 1.2) * scale;
-      const lines = wrapText(ctx, override.text, boxWidth || fontSizePx * 20);
-      let y = node.bounds.top * scale + fontSizePx;
-      for (const line of lines) {
-        this.drawAlignedLine(ctx, line, node, scale, y);
-        y += lineHeight;
-      }
-      ctx.restore();
-      return;
-    }
-
-    // No override: render the original authored runs left-to-right on the layer's baseline(s).
-    let x = node.bounds.left * scale;
-    let y = node.bounds.top * scale + node.runs[0]!.fontSize * scale;
-    for (const run of node.runs) {
-      const fontSizePx = run.fontSize * scale;
-      ctx.font = fontString(run.fontName, fontSizePx, run.bold, run.italic);
-      ctx.fillStyle = rgbaToCss(run.color);
-      const segments = run.text.split(/\r\n|\r|\n/);
-      for (let i = 0; i < segments.length; i++) {
-        if (i > 0) {
-          x = node.bounds.left * scale;
-          y += (run.leadingPt ?? run.fontSize * 1.2) * scale;
-        }
-        ctx.fillText(segments[i]!, x, y);
-        x += ctx.measureText(segments[i]!).width;
+    ctx.transform(scale, 0, 0, scale, 0, 0);
+    ctx.transform(t.m00, t.m10, t.m01, t.m11, t.m02, t.m12);
+    for (const line of lines) {
+      for (const segment of line.segments) {
+        const run = runs[segment.run]!;
+        ctx.font = fontString(run);
+        ctx.fillStyle = rgbaToCss(run.color);
+        ctx.fillText(segment.text, segment.x, line.baseline);
       }
     }
     ctx.restore();
-  }
-
-  private drawAlignedLine(ctx: Ctx2D, line: string, node: Extract<SceneNode, { type: "text" }>, scale: number, y: number): void {
-    const left = node.bounds.left * scale;
-    const right = node.bounds.right * scale;
-    const width = ctx.measureText(line).width;
-    let x = left;
-    if (node.alignment === "center") x = left + (right - left - width) / 2;
-    else if (node.alignment === "right") x = right - width;
-    ctx.fillText(line, x, y);
   }
 }
 

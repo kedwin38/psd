@@ -6,7 +6,9 @@ import { initializeCanvas, writePsdBuffer, type Psd, type Layer } from "ag-psd";
  * layer types the golden-path e2e test exercises: a background, a group
  * containing two text layers, a smart-object photo layer, and a hidden
  * watermark layer. This exists so the e2e test needs no checked-in binary
- * fixture and always matches the current ag-psd version.
+ * fixture and always matches the current ag-psd version. Text sits where its
+ * type transform puts it (first baseline at tx, ty), as in Photoshop; written
+ * without pixels, its layer bounds are empty.
  */
 export function buildTestPsdBuffer(): Buffer {
   initializeCanvas(
@@ -49,6 +51,7 @@ export function buildTestPsdBuffer(): Buffer {
             blendMode: "normal",
             text: {
               text: "Jane Doe",
+              transform: [1, 0, 0, 1, 40, 288],
               style: { font: { name: "ArialMT" }, fontSize: 28, fillColor: { r: 255, g: 255, b: 255, a: 255 } },
             },
           } as Layer,
@@ -62,6 +65,7 @@ export function buildTestPsdBuffer(): Buffer {
             blendMode: "normal",
             text: {
               text: "Software Engineer",
+              transform: [1, 0, 0, 1, 40, 323],
               style: { font: { name: "ArialMT" }, fontSize: 18, fillColor: { r: 220, g: 220, b: 220, a: 255 } },
             },
           } as Layer,

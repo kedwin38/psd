@@ -1,4 +1,4 @@
-import type { Rgba, TextRun } from "@psd-studio/scene-graph";
+import type { Rgba, TextMeasure, TextRun } from "@psd-studio/scene-graph";
 import type { Ctx2D } from "./buffer.js";
 
 const STYLE_WEIGHTS: [RegExp, number][] = [
@@ -50,6 +50,26 @@ export function isFontAvailable(ctx: Ctx2D, fontName: string): boolean {
   } finally {
     ctx.restore();
   }
+}
+
+/** Sets ctx to draw a run at its local font size. Diverges from server: SceneCompositor ignores tracking; PSD tracking is in 1/1000 em. */
+export function setRunFont(ctx: Ctx2D, run: TextRun): void {
+  ctx.font = cssFont(run, run.fontSize);
+  if ("letterSpacing" in ctx) ctx.letterSpacing = `${((run.tracking ?? 0) / 1000) * run.fontSize}px`;
+}
+
+/** Measures runs as paintText draws them; leaves ctx's font set, so callers save and restore around it. */
+export function textMeasure(ctx: Ctx2D): TextMeasure {
+  return {
+    width(text, run) {
+      setRunFont(ctx, run);
+      return ctx.measureText(text).width;
+    },
+    capHeight(run) {
+      setRunFont(ctx, run);
+      return ctx.measureText("H").actualBoundingBoxAscent;
+    },
+  };
 }
 
 export function rgbaToCss({ r, g, b, a }: Rgba): string {

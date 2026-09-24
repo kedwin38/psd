@@ -11,6 +11,6 @@ export {
   type LayerImageRequest,
   type UploadImageRequest,
 } from "./images.js";
-export { cssFont, isFontAvailable, rgbaToCss } from "./text.js";
+export { cssFont, isFontAvailable, rgbaToCss, textMeasure } from "./text.js";
 export { MAX_CROP_ZOOM, constrainPlacement, coverCrop, cropOf, movePlacement, placementOf, scalePlacement } from "./crop.js";
 export { exportDivergences, type ExportDivergence } from "./divergence.js";

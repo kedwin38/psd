@@ -22,6 +22,10 @@ function pixel(id: string, bounds: SceneNode["bounds"], extra: Partial<SceneNode
   return { ...base(id, bounds, extra), type: "pixel", imageAssetId: id } as SceneNode;
 }
 
+function translate(x: number, y: number) {
+  return { m00: 1, m01: 0, m10: 0, m11: 1, m02: x, m12: y };
+}
+
 function graphOf(root: SceneNode[]): SceneGraph {
   return { formatVersion: 1, width: 100, height: 100, dpi: 72, colorMode: "rgb", root };
 }
@@ -102,6 +106,7 @@ describe("renderScene", () => {
       type: "text",
       alignment: "left",
       boxMode: "point",
+      frame: { transform: translate(10, 40), box: null },
       runs: [{ text: "Hello\nWide world", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
     } as SceneNode;
     const rect = measureTextBounds(napiBuffer(1, 1), text as Extract<SceneNode, { type: "text" }>);
@@ -180,14 +185,19 @@ describe("renderScene", () => {
       type: "text",
       alignment: "center",
       boxMode: "point",
+      frame: { transform: translate(100, 40), box: null },
       runs: [{ text: "Jo", fontName: "Arial", fontSize: 20, color: { r: 0, g: 0, b: 0, a: 1 } }],
     } as Extract<SceneNode, { type: "text" }>;
     const ctx = napiBuffer(1, 1);
     const short = measureFieldTextBounds(ctx, text, "Jo");
     const long = measureFieldTextBounds(ctx, text, "Jonathan Livingston");
-    expect(long.right - long.left).toBeGreaterThan((short.right - short.left) * 4);
+    expect(long.right - long.left).toBeGreaterThan((short.right - short.left) * 3);
     expect((long.left + long.right) / 2).toBeCloseTo(100, 5);
-    expect(long.bottom).toBeCloseTo(20 + 20 + 5);
+    // Point text wraps replacement text at its authored width, one auto-leading line (24) per wrapped line.
+    const { lines } = fieldTextFit(ctx, text, "Jonathan Livingston");
+    expect(lines).toBe(2);
+    expect(short.bottom).toBeCloseTo(40 + 5);
+    expect(long.bottom).toBeCloseTo(40 + 5 + 24);
   });
 
   it("flags text styling the server compositor doesn't apply yet", () => {

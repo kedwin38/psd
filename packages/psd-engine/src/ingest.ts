@@ -1,12 +1,14 @@
-import { readPsd, type Psd, type Layer, ColorMode as AgColorMode } from "ag-psd";
+import { readPsd, type Psd, type Layer, type LayerTextData, type ParagraphStyle, ColorMode as AgColorMode } from "ag-psd";
 import {
   type SceneGraph,
   type SceneNode,
   type Rect,
   type ColorMode,
   type TextRun,
+  type TextFrame,
   IdentityTransform,
   idFromPath,
+  transformRect,
 } from "@psd-studio/scene-graph";
 import { ensureCanvasInitialized } from "./canvasFactory.js";
 import { mapBlendMode } from "./blendMode.js";
@@ -76,6 +78,65 @@ function unionBounds(rects: Rect[]): Rect | null {
   }));
 }
 
+function hasPixels(layer: Layer): boolean {
+  return (layer.right ?? 0) > (layer.left ?? 0) && (layer.bottom ?? 0) > (layer.top ?? 0);
+}
+
+/**
+ * Photoshop lays text out in local space and places it with the type tool's transform [xx, xy, yx, yy, tx, ty]:
+ * point text's first baseline starts at (tx, ty) on its alignment edge; paragraph text wraps in boxBounds. The
+ * layer record's bounds are only the rendered glyphs' extent. Generators that write text without pixels and
+ * leave the transform at identity carry the position in the (empty) record bounds alone; those get no frame.
+ */
+function textFrameOf(layer: Layer): TextFrame | undefined {
+  const text = layer.text!;
+  const [xx = 1, xy = 0, yx = 0, yy = 1, tx = 0, ty = 0] = text.transform ?? [];
+  const unset = xx === 1 && xy === 0 && yx === 0 && yy === 1 && tx === 0 && ty === 0;
+  if (unset && !hasPixels(layer) && (layer.left || layer.top)) return undefined;
+  const box = text.shapeType === "box" && text.boxBounds?.length === 4 ? text.boxBounds : null;
+  return {
+    transform: { m00: xx, m01: yx, m10: xy, m11: yy, m02: tx, m12: ty },
+    box: box && { left: box[0]!, top: box[1]!, right: box[2]!, bottom: box[3]! },
+  };
+}
+
+/** Photoshop's rendered glyph extent when the layer has pixels; otherwise the text's own local extent placed through its frame. */
+function textBoundsOf(layer: Layer, frame: TextFrame | undefined, fontSize: number): Rect {
+  if (hasPixels(layer) || !frame) return boundsOf(layer, { left: 0, top: 0, right: 0, bottom: 0 });
+  const local = layer.text!.boundingBox ?? layer.text!.bounds;
+  const rect = local
+    ? { left: local.left.value, top: local.top.value, right: local.right.value, bottom: local.bottom.value }
+    : (frame.box ?? { left: 0, top: -fontSize, right: 0, bottom: 0 });
+  return transformRect(frame.transform, rect);
+}
+
+/** A paragraph setting as it applies to the first paragraph: ag-psd's base style omits settings the paragraphs differ on. */
+function paragraphSetting<K extends keyof ParagraphStyle>(text: LayerTextData, key: K): ParagraphStyle[K] {
+  return text.paragraphStyle?.[key] ?? text.paragraphStyleRuns?.[0]?.style[key];
+}
+
+/** Type features the renderers don't reproduce. */
+function textLayoutLimits(layer: Layer): string[] {
+  const text = layer.text!;
+  const [, xy = 0, yx = 0] = text.transform ?? [];
+  const paragraphs = [text.paragraphStyle, ...(text.paragraphStyleRuns ?? []).map((r) => r.style)];
+  const limits: string[] = [];
+  if (xy !== 0 || yx !== 0) limits.push("Text is rotated or skewed: it is drawn through its type transform, but no Photoshop sample has confirmed rotated placement; check it against the design.");
+  if (text.warp?.style && text.warp.style !== "none") limits.push(`Warped text ("${text.warp.style}") renders unwarped.`);
+  // Text engine frame types: 0 point, 1 paragraph box, 2 type on a path.
+  if (text.textPath?.data.type === 2) limits.push("Type on a path renders on a straight baseline, not along the path.");
+  if (text.orientation === "vertical") limits.push("Vertical text renders horizontally.");
+  if (text.shapeType === "box" && paragraphSetting(text, "justification")?.startsWith("justify")) {
+    limits.push("Justified paragraph lines render ragged, not stretched to the box edges.");
+  }
+  const keys = ["justification", "spaceBefore", "spaceAfter"] as const;
+  if (keys.some((key) => new Set(text.paragraphStyleRuns?.map((r) => r.style[key] ?? text.paragraphStyle?.[key])).size > 1)) {
+    limits.push("Paragraphs differ in alignment or spacing; all of them lay out like the first.");
+  }
+  if (paragraphs.some((p) => p?.firstLineIndent || p?.startIndent || p?.endIndent)) limits.push("Paragraph indents are not applied.");
+  return limits;
+}
+
 function mapAlignment(justification: string | undefined): "left" | "center" | "right" | "justify" {
   switch (justification) {
     case "center":
@@ -98,17 +159,24 @@ function buildTextRuns(layer: Layer, warnings: IngestWarning[], path: string): T
   const fullText = textData.text ?? "";
   const baseStyle = textData.style ?? {};
   const styleRuns = textData.styleRuns;
+  const autoLeading = textData.paragraphStyle?.autoLeading ?? 1.2;
 
-  const toRun = (text: string, style: typeof baseStyle): TextRun => ({
-    text,
-    fontName: style.font?.name ?? baseStyle.font?.name ?? "Helvetica",
-    fontSize: style.fontSize ?? baseStyle.fontSize ?? 12,
-    color: toRgba(style.fillColor ?? baseStyle.fillColor, 1),
-    tracking: style.tracking ?? baseStyle.tracking,
-    leadingPt: style.leading ?? baseStyle.leading,
-    bold: style.fauxBold ?? baseStyle.fauxBold,
-    italic: style.fauxItalic ?? baseStyle.fauxItalic,
-  });
+  const toRun = (text: string, style: typeof baseStyle): TextRun => {
+    const fontSize = style.fontSize ?? baseStyle.fontSize ?? 12;
+    const leading = style.leading ?? baseStyle.leading;
+    // With auto leading on, Photoshop ignores the stored leading value (often a stale one).
+    const auto = leading === undefined || (style.autoLeading ?? baseStyle.autoLeading) !== false;
+    return {
+      text,
+      fontName: style.font?.name ?? baseStyle.font?.name ?? "Helvetica",
+      fontSize,
+      color: toRgba(style.fillColor ?? baseStyle.fillColor, 1),
+      tracking: style.tracking ?? baseStyle.tracking,
+      leadingPt: auto ? fontSize * autoLeading : leading,
+      bold: style.fauxBold ?? baseStyle.fauxBold,
+      italic: style.fauxItalic ?? baseStyle.fauxItalic,
+    };
+  };
 
   if (!styleRuns || styleRuns.length === 0) {
     return [toRun(fullText, baseStyle)];
@@ -201,7 +269,14 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
     // --- Text ---
     if (layer.text) {
       const runs = buildTextRuns(layer, warnings, path);
-      const bounds = boundsOf(layer, { left: 0, top: 0, right: 0, bottom: 0 });
+      const frame = textFrameOf(layer);
+      if (!frame) {
+        warn({ path, message: "Text layer has no type transform (it would draw at the document origin in Photoshop); placed from its layer bounds instead." });
+      }
+      for (const message of textLayoutLimits(layer)) warn({ path, message });
+      const bounds = textBoundsOf(layer, frame, runs[0]!.fontSize);
+      const before = paragraphSetting(layer.text, "spaceBefore") ?? 0;
+      const after = paragraphSetting(layer.text, "spaceAfter") ?? 0;
       return {
         type: "text",
         id,
@@ -215,8 +290,10 @@ export async function buildSceneGraph(psd: Psd, sink: AssetSink, options: Ingest
         maskAssetId,
         bounds,
         runs,
-        alignment: mapAlignment(layer.text.paragraphStyle?.justification),
+        alignment: mapAlignment(paragraphSetting(layer.text, "justification")),
         boxMode: layer.text.shapeType === "box" ? "paragraph" : "point",
+        ...(frame && { frame }),
+        ...(before || after ? { paragraphSpacing: { before, after } } : {}),
       };
     }
 
