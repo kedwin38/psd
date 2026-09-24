@@ -1,4 +1,4 @@
-import type { FieldOverride } from "@psd-studio/scene-graph";
+import { toFieldOverrides, type FieldOverride } from "@psd-studio/scene-graph";
 import type { PrismaService } from "../prisma/prisma.service";
 
 /** Loads a project's saved edits as the FieldOverride[] the compositor expects. */
@@ -7,8 +7,5 @@ export async function loadFieldOverrides(prisma: PrismaService, projectId: strin
     where: { projectId },
     include: { templateField: true },
   });
-  return values.map((v) => ({
-    ...(v.value as object),
-    nodeId: v.templateField.nodeId,
-  })) as FieldOverride[];
+  return toFieldOverrides(values.map((v) => ({ nodeId: v.templateField.nodeId, value: v.value })));
 }

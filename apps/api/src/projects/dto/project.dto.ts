@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CropRectSchema } from "@psd-studio/scene-graph";
 
 export const CreateProjectSchema = z.object({
   templateId: z.string().uuid(),
@@ -11,12 +12,7 @@ export const PatchFieldValueSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("image"),
     imageAssetId: z.string().min(1),
-    crop: z.object({
-      x: z.number().min(0).max(1),
-      y: z.number().min(0).max(1),
-      width: z.number().min(0).max(1),
-      height: z.number().min(0).max(1),
-    }),
+    crop: CropRectSchema,
   }),
   z.object({ type: z.literal("visibility"), visible: z.boolean() }),
 ]);

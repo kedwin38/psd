@@ -7,7 +7,7 @@ import {
   referencedAssetIds,
   type SceneGraph,
 } from "./index.js";
-import { FieldOverrideSchema } from "./fields.js";
+import { CropRectSchema, FieldOverrideSchema, toFieldOverrides } from "./fields.js";
 
 function sampleGraph(): SceneGraph {
   return {
@@ -139,5 +139,30 @@ describe("FieldOverrideSchema", () => {
         crop: { x: -0.1, y: 0, width: 1, height: 1 },
       }),
     ).toThrow();
+  });
+});
+
+describe("CropRectSchema", () => {
+  it("rejects windows that extend past the image or have no area", () => {
+    expect(CropRectSchema.safeParse({ x: 0.5, y: 0, width: 0.6, height: 1 }).success).toBe(false);
+    expect(CropRectSchema.safeParse({ x: 0, y: 0.2, width: 1, height: 0.9 }).success).toBe(false);
+    expect(CropRectSchema.safeParse({ x: 0, y: 0, width: 0, height: 1 }).success).toBe(false);
+    expect(CropRectSchema.safeParse({ x: 0.25, y: 0, width: 0.5, height: 1 }).success).toBe(true);
+    expect(CropRectSchema.safeParse({ x: 0.3, y: 0, width: 0.7000000001, height: 1 }).success).toBe(true);
+  });
+});
+
+describe("toFieldOverrides", () => {
+  it("attaches each value's node id and drops values that aren't overrides", () => {
+    const overrides = toFieldOverrides([
+      { nodeId: "n_text", value: { type: "text", text: "Hi" } },
+      { nodeId: "n_photo", value: { type: "image", imageAssetId: "a1", crop: { x: 0, y: 0, width: 1, height: 1 }, previewName: "me.png" } },
+      { nodeId: "n_bad", value: { type: "image", imageAssetId: "a2", crop: { x: 0.5, y: 0, width: 1, height: 1 } } },
+      { nodeId: "n_junk", value: null },
+    ]);
+    expect(overrides).toEqual([
+      { type: "text", nodeId: "n_text", text: "Hi" },
+      { type: "image", nodeId: "n_photo", imageAssetId: "a1", crop: { x: 0, y: 0, width: 1, height: 1 } },
+    ]);
   });
 });
