@@ -162,6 +162,100 @@ describe("buildSceneGraph", () => {
     }
   });
 
+  function textLayer(text: Layer["text"], extra: Partial<Layer> = {}): Psd {
+    return { width: 600, height: 400, children: [{ name: "T", opacity: 1, blendMode: "normal", text, ...extra } as Layer] };
+  }
+
+  async function ingestText(psd: Psd) {
+    const { sceneGraph, warnings } = await buildSceneGraph(psd, new RecordingSink());
+    const node = sceneGraph.root[0]!;
+    if (node.type !== "text") throw new Error("expected a text node");
+    return { node, warnings: warnings.map((w) => w.message) };
+  }
+
+  it("places text by its type transform: point origin, paragraph box, local units", async () => {
+    const style = { font: { name: "ArialMT" }, fontSize: 12 };
+    const point = await ingestText(textLayer({ text: "Jane", transform: [4, 0, 0, 4, 100, 250], style }, { left: 102, top: 216, right: 240, bottom: 251 }));
+    expect(point.node.frame).toEqual({ transform: { m00: 4, m01: 0, m10: 0, m11: 4, m02: 100, m12: 250 }, box: null });
+    expect(point.node.bounds).toEqual({ left: 102, top: 216, right: 240, bottom: 251 });
+    expect(point.node.runs[0]!.fontSize).toBe(12);
+    expect(point.warnings).toEqual([]);
+
+    const box = await ingestText(textLayer({ text: "Address line", transform: [1, 0, 0, 1, 40, 60], shapeType: "box", boxBounds: [0, 0, 200, 80], style }));
+    expect(box.node.boxMode).toBe("paragraph");
+    expect(box.node.frame).toEqual({ transform: { m00: 1, m01: 0, m10: 0, m11: 1, m02: 40, m12: 60 }, box: { left: 0, top: 0, right: 200, bottom: 80 } });
+  });
+
+  it("derives bounds from the type frame when the layer has no rendered pixels", async () => {
+    const units = (value: number) => ({ units: "Points" as const, value });
+    const boundingBox = { left: units(1), top: units(-9), right: units(49), bottom: units(0) };
+    const glyphs = await ingestText(textLayer({ text: "Hi", transform: [2, 0, 0, 2, 100, 50], boundingBox, style: { fontSize: 12 } }, { left: 100, top: 50, right: 100, bottom: 50 }));
+    expect(glyphs.node.bounds).toEqual({ left: 102, top: 32, right: 198, bottom: 50 });
+
+    const box = await ingestText(textLayer({ text: "Hi", transform: [1, 0, 0, 1, 10, 20], shapeType: "box", boxBounds: [0, 0, 150, 40], style: { fontSize: 12 } }));
+    expect(box.node.bounds).toEqual({ left: 10, top: 20, right: 160, bottom: 60 });
+
+    const bare = await ingestText(textLayer({ text: "Hi", transform: [1, 0, 0, 1, 40, 288], style: { fontSize: 28 } }, { left: 40, top: 260, right: 40, bottom: 260 }));
+    expect(bare.node.bounds).toEqual({ left: 40, top: 260, right: 40, bottom: 288 });
+  });
+
+  it("falls back to layer bounds, with a warning, when a generator left the type transform unset", async () => {
+    const { node, warnings } = await ingestText(textLayer({ text: "Jane", transform: [1, 0, 0, 1, 0, 0], style: { fontSize: 28 } }, { left: 40, top: 260, right: 40, bottom: 260 }));
+    expect(node.frame).toBeUndefined();
+    expect(node.bounds).toEqual({ left: 40, top: 260, right: 40, bottom: 260 });
+    expect(warnings.some((m) => m.includes("type transform is unset"))).toBe(true);
+  });
+
+  it("uses auto leading instead of a stale stored leading", async () => {
+    const leadingOf = async (style: NonNullable<Layer["text"]>["style"], paragraphStyle?: NonNullable<Layer["text"]>["paragraphStyle"]) =>
+      (await ingestText(textLayer({ text: "a\nb", transform: [1, 0, 0, 1, 10, 50], style, paragraphStyle }))).node.runs[0]!.leadingPt;
+    expect(await leadingOf({ fontSize: 48, leading: 6, autoLeading: true })).toBeCloseTo(57.6);
+    expect(await leadingOf({ fontSize: 20, leading: 6, autoLeading: true }, { autoLeading: 1.75 })).toBeCloseTo(35);
+    expect(await leadingOf({ fontSize: 48 })).toBeCloseTo(57.6);
+    expect(await leadingOf({ fontSize: 14, leading: 14, autoLeading: false })).toBe(14);
+  });
+
+  it("reads paragraph settings from the first paragraph and character scaling, shift and caps from each run", async () => {
+    const { node, warnings } = await ingestText(
+      textLayer({
+        text: "Hello\nWorld",
+        transform: [1, 0, 0, 1, 43, 81.5],
+        style: { fontSize: 60, horizontalScale: 1.2, baselineShift: -4, fontCaps: 2 },
+        paragraphStyle: { spaceAfter: 10 },
+        paragraphStyleRuns: [
+          { length: 6, style: { justification: "center" } },
+          { length: 5, style: { justification: "left" } },
+        ],
+      }),
+    );
+    expect(node.alignment).toBe("center");
+    expect(node.paragraphSpacing).toEqual({ before: 0, after: 10 });
+    expect(node.runs[0]).toMatchObject({ horizontalScale: 1.2, baselineShift: -4, allCaps: true });
+    expect(warnings).toEqual(["Paragraphs differ in alignment or spacing; all of them lay out like the first."]);
+  });
+
+  it("warns about type features the renderers don't reproduce", async () => {
+    const { warnings } = await ingestText(
+      textLayer({
+        text: "Arc",
+        transform: [0.866, 0.5, -0.5, 0.866, 100, 100],
+        warp: { style: "arc", value: 50 },
+        orientation: "vertical",
+        style: { fontSize: 20, fontCaps: 1 },
+        paragraphStyle: { firstLineIndent: 12 },
+        textPath: { data: { type: 2, frameMatrix: [], textRange: [], pathData: {} } },
+      }),
+    );
+    expect(warnings).toEqual([
+      expect.stringContaining("rotated or skewed"),
+      'Warped text ("arc") renders unwarped.',
+      "Type on a path renders on a straight baseline, not along the path.",
+      "Vertical text renders horizontally.",
+      "Paragraph indents are not applied.",
+      "Small caps, superscript and subscript render as regular text.",
+    ]);
+  });
+
   it("marks a placed layer as a smart object and warns about baked content", async () => {
     const psd: Psd = {
       width: 100,
