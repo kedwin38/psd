@@ -71,3 +71,21 @@ test("an expired access token doesn't log the admin out when a poll and Publish 
   await expect(page.getByRole("heading", { name: "Template library" })).toBeVisible({ timeout: 10_000 });
   expect(page.url()).toMatch(/\/admin\/templates$/);
 });
+
+test("tabs that load at the same moment, as on a browser session restore, all stay signed in", async ({ page, context }) => {
+  test.setTimeout(90_000);
+  await registerAdmin(page, context, "many-tabs@example.com");
+  const tabs = [page, await context.newPage(), await context.newPage()];
+  const library = (tab: Page) => expect(tab.getByRole("heading", { name: "Template library" })).toBeVisible({ timeout: 20_000 });
+  const latency = async (tab: Page, ms: number) =>
+    (await context.newCDPSession(tab)).send("Network.emulateNetworkConditions", { offline: false, latency: ms, downloadThroughput: -1, uploadThroughput: -1 });
+
+  // Every tab sends its refresh before any other tab's rotated cookie has come back.
+  for (const tab of tabs) await latency(tab, 500);
+  await Promise.all(tabs.map((tab) => tab.goto("/admin/templates")));
+  for (const tab of tabs) await library(tab);
+
+  for (const tab of tabs) await latency(tab, 0);
+  await page.reload();
+  await library(page);
+});

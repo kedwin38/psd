@@ -82,13 +82,18 @@ async function refresh(): Promise<string | null> {
   return accessToken;
 }
 
+/** Tabs take turns, so each sends the refresh cookie the previous one left behind. */
+async function refreshInTurn(): Promise<string | null> {
+  return "locks" in navigator ? await navigator.locks.request("session-refresh", refresh) : refresh();
+}
+
 /**
- * Mints a fresh access token from the refresh cookie; used at boot, on 401 and ahead of expiry. Concurrent callers
- * share one request: the refresh token rotates on use, and the API treats a second use of the old one as a replay and
- * revokes the whole session.
+ * Mints a fresh access token from the refresh cookie; used at boot, on 401 and ahead of expiry. The refresh token
+ * rotates on use and the API treats a second use of the old one as a replay that revokes the whole session, so
+ * concurrent callers share one request.
  */
 export function tryRefresh(): Promise<string | null> {
-  refreshing ??= refresh().finally(() => {
+  refreshing ??= refreshInTurn().finally(() => {
     refreshing = null;
   });
   return refreshing;
