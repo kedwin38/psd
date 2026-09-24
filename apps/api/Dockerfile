@@ -31,8 +31,9 @@ RUN pnpm --filter @psd-studio/api deploy --prod --legacy /deploy
 
 # --- runtime: small final image ---
 FROM node:22-slim AS runtime
-# Prisma's query engine needs libssl at runtime on Debian.
-RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+# Prisma's query engine needs libssl at runtime on Debian. The slim base ships no fonts, and
+# @napi-rs/canvas draws no text at all without one, so exports would silently lose every text layer.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl fonts-liberation fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 WORKDIR /app
