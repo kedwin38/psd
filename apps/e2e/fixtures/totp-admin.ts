@@ -14,10 +14,10 @@ export interface SeededAdmin {
  * which sets a password and TOTP secret and enrolls no passkey. Needs the built API and the API's DATABASE_URL and
  * PASSWORD_PEPPER in the environment.
  */
-export function seedTotpAdmin(email: string): SeededAdmin {
+export function seedTotpAdmin(email: string, displayName = "Studio Admin"): SeededAdmin {
   const password = "e2e-admin-password-not-secret";
   const out = execFileSync("node", [join(__dirname, "../../api/dist/scripts/seed-admin.js")], {
-    env: { ...process.env, ADMIN_EMAIL: email, ADMIN_PASSWORD: password },
+    env: { ...process.env, ADMIN_EMAIL: email, ADMIN_PASSWORD: password, ADMIN_DISPLAY_NAME: displayName },
   }).toString();
   const { totpSecretBase32 } = JSON.parse(out.split("SEED_ADMIN_RESULT ")[1]!) as { totpSecretBase32: string };
   return { email, password, totpSecretBase32 };

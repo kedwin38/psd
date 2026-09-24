@@ -161,9 +161,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown, stepUpToken?: string) => request<T>(path, { method: "POST", body: body ?? {}, stepUpToken }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
+  patch: <T>(path: string, body?: unknown, stepUpToken?: string) => request<T>(path, { method: "PATCH", body, stepUpToken }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
-  del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  del: <T>(path: string, stepUpToken?: string) => request<T>(path, { method: "DELETE", stepUpToken }),
   upload: <T>(path: string, form: FormData, onUploadProgress?: (fraction: number) => void) =>
     request<T>(path, { method: "POST", body: form, isFormData: true, onUploadProgress }),
   blob: (path: string, signal?: AbortSignal) => send(path, { signal }).then((res) => res.blob()),

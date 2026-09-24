@@ -1,10 +1,11 @@
 import { NavLink, Outlet, useMatch } from "react-router-dom";
-import { FolderTree, LayoutGrid, Library, LogOut, ScrollText, ShieldCheck } from "lucide-react";
+import { FolderTree, LayoutGrid, Library, LogOut, ScrollText, ShieldCheck, Users } from "lucide-react";
 import { useAuth } from "../lib/auth-context";
 import { logout } from "../lib/auth-api";
+import type { RoleName } from "../lib/types";
 import { BrandMark } from "./workspace";
 
-const ROLE_LABEL: Record<string, string> = {
+export const ROLE_LABEL: Record<RoleName, string> = {
   SUPER_ADMIN: "Super admin",
   CONTENT_ADMIN: "Content admin",
   ORG_ADMIN: "Org admin",
@@ -20,6 +21,7 @@ export function Layout() {
   if (inEditor || inWorkspace) return <Outlet />;
 
   const isAdmin = user?.roles.some((r) => r === "SUPER_ADMIN" || r === "CONTENT_ADMIN");
+  const isSuperAdmin = user?.roles.includes("SUPER_ADMIN");
   const isAuditor = user?.roles.some((r) => r === "SUPER_ADMIN" || r === "AUDITOR");
   const topRole = user?.roles.find((r) => r !== "END_USER") ?? user?.roles[0];
 
@@ -46,6 +48,12 @@ export function Layout() {
               Template Library
             </NavLink>
           </>
+        )}
+        {isSuperAdmin && (
+          <NavLink to="/admin/users">
+            <Users size={17} aria-hidden="true" />
+            Users
+          </NavLink>
         )}
         {isAuditor && (
           <NavLink to="/admin/audit-log">

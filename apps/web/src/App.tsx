@@ -10,6 +10,7 @@ import { CategoriesAdminPage } from "./admin/CategoriesAdminPage";
 import { TemplatesAdminPage } from "./admin/TemplatesAdminPage";
 import { TemplateWorkspacePage } from "./admin/TemplateWorkspacePage";
 import { AuditLogPage } from "./admin/AuditLogPage";
+import { UsersAdminPage } from "./admin/UsersAdminPage";
 import type { RoleName } from "./lib/types";
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: RoleName[] }) {
@@ -65,6 +66,14 @@ export default function App() {
           element={
             <ProtectedRoute roles={ADMIN_ROLES}>
               <TemplateWorkspacePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/users"
+          element={
+            <ProtectedRoute roles={["SUPER_ADMIN"]}>
+              <UsersAdminPage />
             </ProtectedRoute>
           }
         />

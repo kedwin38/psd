@@ -364,9 +364,9 @@ button.icon-btn.sm { width: 26px; height: 26px; }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.85; }
 .badge.plain::before { display: none; }
 .badge.PUBLISHED, .badge.READY, .badge.COMPLETE, .badge.ACTIVE, .badge.EXPORTED { background: var(--success-50); color: var(--success-700); }
-.badge.DRAFT, .badge.PENDING, .badge.QUEUED, .badge.IN_PROGRESS, .badge.ARCHIVED { background: var(--gray-100); color: var(--gray-600); }
+.badge.DRAFT, .badge.PENDING, .badge.QUEUED, .badge.IN_PROGRESS, .badge.ARCHIVED, .badge.PENDING_VERIFICATION { background: var(--gray-100); color: var(--gray-600); }
 .badge.PARSING, .badge.RENDERING { background: var(--accent-50); color: var(--accent-600); }
-.badge.FAILED { background: var(--danger-50); color: var(--danger-700); }
+.badge.FAILED, .badge.SUSPENDED { background: var(--danger-50); color: var(--danger-700); }
 
 /* ---------- Cards and tables (console pages) ---------- */
 .card {
@@ -397,6 +397,15 @@ th { background: var(--gray-50); color: var(--text-dim); font-weight: 600; font-
 tbody tr { transition: background-color var(--dur-fast); }
 tbody tr:hover td { background: var(--gray-25); }
 .card table { border-radius: var(--r-md); }
+
+/* Admin: users */
+.users-search input { width: 260px; }
+.users-you { margin-left: 6px; }
+.user-roles { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.role-chip { padding-right: 2px; }
+.role-chip button.icon-btn.sm { width: 18px; height: 18px; border-radius: var(--r-pill); color: inherit; }
+.user-role-add { gap: 6px; margin-top: 8px; }
+.user-role-add select { height: 28px; width: auto; font-size: var(--fs-sm); }
 
 /* ---------- App shell (console) ---------- */
 .app-shell { display: flex; min-height: 100vh; }

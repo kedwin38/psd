@@ -8,6 +8,26 @@ export interface AuthenticatedUser {
   steppedUp: boolean;
 }
 
+export type UserStatus = "ACTIVE" | "SUSPENDED" | "PENDING_VERIFICATION";
+
+export interface RoleAssignment {
+  id: string;
+  role: RoleName;
+  organizationId: string | null;
+  categoryId: string | null;
+  createdAt: string;
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  displayName: string;
+  status: UserStatus;
+  mfaEnrolled: boolean;
+  createdAt: string;
+  roles: RoleAssignment[];
+}
+
 export interface Category {
   id: string;
   name: string;
