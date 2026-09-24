@@ -112,8 +112,9 @@ pnpm run test:e2e    # Playwright, drives the real app end-to-end — needs
 
 The e2e suite reads `E2E_WEB_URL` (default `http://localhost:5173`),
 `DATABASE_URL` (it truncates that database and grants the admin role
-directly) and optionally `E2E_CHROMIUM_PATH`. Each spec starts from an
-empty database.
+directly), `PASSWORD_PEPPER` (the password + TOTP admin spec provisions
+its admin with the built API's `seed-admin` script) and optionally
+`E2E_CHROMIUM_PATH`. Each spec starts from an empty database.
 
 `test:e2e` uses Chrome DevTools Protocol's WebAuthn domain to attach a
 *virtual* authenticator, so the passkey flows are exercised for real —
@@ -163,7 +164,8 @@ drive mouse, wheel, keyboard and Space+drag.)
 - Passkey (WebAuthn) registration and login as the primary auth path;
   password+TOTP as an always-MFA fallback (no password-only login for any
   role); rotating refresh tokens with reuse detection; step-up
-  re-authentication gating destructive admin actions; RBAC enforced
+  re-authentication (passkey, or authenticator code for accounts without
+  one) gating publishing and destructive admin actions; RBAC enforced
   server-side; a hash-chained, tamper-evident audit log.
 - Real PSD/PSB ingestion via `ag-psd` — layers, groups, multi-run text,
   smart objects, adjustment layers, blend-mode mapping with documented
