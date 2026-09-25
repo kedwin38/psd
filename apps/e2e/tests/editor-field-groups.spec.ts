@@ -27,7 +27,7 @@ function outline(page: Page): Promise<[string, number][]> {
   return panel(page).evaluate((root) => {
     const rows: [string, number][] = [];
     const walk = (el: Element, depth: number) => {
-      for (const child of el.children) {
+      for (const child of Array.from(el.children)) {
         if (child.classList.contains("field-block")) rows.push([child.getAttribute("aria-label")!, depth]);
         else if (child.classList.contains("field-group")) {
           rows.push([`group:${child.querySelector(":scope > .field-group-head .field-group-name")!.textContent}`, depth]);
