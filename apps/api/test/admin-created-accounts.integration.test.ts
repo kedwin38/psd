@@ -158,7 +158,7 @@ describe("Password-only sign-in for accounts without an admin role", () => {
   it("signs a self-registered END_USER in with a password alone once they've set one", async () => {
     const reg = await http().post("/api/v1/auth/register").send({ email: "self-signup@example.com", displayName: "Self Signup" });
     expect(reg.status).toBe(201);
-    await app.get(AuthService).setPassword(reg.body.userId, PASSWORD);
+    await app.get(AuthService).setPassword(reg.body.userId, PASSWORD, true);
 
     const res = await login("self-signup@example.com", PASSWORD);
     expect(res.status).toBe(201);
@@ -172,7 +172,7 @@ describe("Password-only sign-in for accounts without an admin role", () => {
     const legacy = await prisma.user.create({
       data: { email: "legacy-admin@example.com", displayName: "Legacy", status: "ACTIVE", roles: { create: [{ role: RoleName.END_USER }, { role: RoleName.CONTENT_ADMIN }] } },
     });
-    await app.get(AuthService).setPassword(legacy.id, PASSWORD);
+    await app.get(AuthService).setPassword(legacy.id, PASSWORD, true);
 
     const res = await login(legacy.email, PASSWORD);
     expect(res.status).toBe(403);

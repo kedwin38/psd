@@ -154,7 +154,16 @@ export class AuthService {
   // account holding no admin role, or one an admin provisioned with an admin role — and that one gets a session the
   // JwtAuthGuard confines to enrolling TOTP. Roles are read fresh at every sign-in, since they change.
 
-  async setPassword(userId: string, password: string): Promise<void> {
+  /**
+   * Replacing an existing password/TOTP secret needs step-up: a request carrying only a still-valid
+   * access token (e.g. one that leaked, or a device left unlocked) must not be able to silently swap
+   * out a credential for one the real owner doesn't control and keep permanent access.
+   */
+  async setPassword(userId: string, password: string, steppedUp: boolean): Promise<void> {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
+    if (user.passwordHash && !steppedUp) {
+      throw new ForbiddenException("Changing an existing password requires step-up re-authentication.");
+    }
     const hash = await this.password.hash(password);
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash } });
   }
@@ -265,11 +274,18 @@ export class AuthService {
 
   // --- TOTP enrollment passthroughs --------------------------------------------
 
-  async totpEnrollOptions(userId: string, email: string) {
+  /** Same reasoning as setPassword: re-enrolling over an already-verified TOTP secret needs step-up. */
+  async totpEnrollOptions(userId: string, email: string, steppedUp: boolean) {
+    if ((await this.totp.isEnrolled(userId)) && !steppedUp) {
+      throw new ForbiddenException("Replacing an existing authenticator requires step-up re-authentication.");
+    }
     return this.totp.beginEnrollment(userId, email);
   }
 
-  async totpEnrollVerify(userId: string, code: string) {
+  async totpEnrollVerify(userId: string, code: string, steppedUp: boolean) {
+    if ((await this.totp.isEnrolled(userId)) && !steppedUp) {
+      throw new ForbiddenException("Replacing an existing authenticator requires step-up re-authentication.");
+    }
     return this.totp.confirmEnrollment(userId, code);
   }
 }

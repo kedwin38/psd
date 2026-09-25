@@ -46,7 +46,7 @@ describe("Admin user management", () => {
     const user = await prisma.user.create({
       data: { email: "member@example.com", displayName: "Member", status: "ACTIVE", roles: { create: { role: RoleName.END_USER } } },
     });
-    await app.get(AuthService).setPassword(user.id, PASSWORD);
+    await app.get(AuthService).setPassword(user.id, PASSWORD, true);
     const totp = app.get(TotpService);
     const { secretBase32 } = await totp.beginEnrollment(user.id, user.email);
     member = { id: user.id, email: user.email, secretBase32 };

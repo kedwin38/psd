@@ -131,7 +131,7 @@ export class AuthController {
 
   @Post("password")
   async setPassword(@CurrentUser() user: AuthenticatedUser, @Body(new ZodValidationPipe(SetPasswordSchema)) body: SetPasswordDto) {
-    await this.auth.setPassword(user.id, body.password);
+    await this.auth.setPassword(user.id, body.password, user.steppedUp);
     return { ok: true };
   }
 
@@ -140,13 +140,13 @@ export class AuthController {
   @MfaSetupAllowed()
   @Post("totp/enroll/options")
   async totpEnrollOptions(@CurrentUser() user: AuthenticatedUser) {
-    return this.auth.totpEnrollOptions(user.id, user.email);
+    return this.auth.totpEnrollOptions(user.id, user.email, user.steppedUp);
   }
 
   @MfaSetupAllowed()
   @Post("totp/enroll/verify")
   async totpEnrollVerify(@CurrentUser() user: AuthenticatedUser, @Body(new ZodValidationPipe(TotpEnrollVerifySchema)) body: TotpEnrollVerifyDto) {
-    return this.auth.totpEnrollVerify(user.id, body.code);
+    return this.auth.totpEnrollVerify(user.id, body.code, user.steppedUp);
   }
 
   // --- Step-up re-authentication (spec §12) ---------------------------------
