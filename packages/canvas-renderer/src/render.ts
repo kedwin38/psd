@@ -38,7 +38,6 @@ export interface SceneRenderOptions {
 export function renderScene(ctx: Ctx2D, graph: SceneGraph, options: SceneRenderOptions): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   const painter = new Painter(options);
-  // Diverges from server: SceneCompositor ignores clipping for top-level layers; Photoshop (and this) honor it.
   for (const unit of clipUnits(graph.root)) painter.paintClipUnit(ctx, unit);
 }
 
@@ -161,7 +160,6 @@ class Painter {
     const { transform: t, lines, runs } = layoutFor(ctx, node, override?.type === "text" ? override.text : undefined);
     const { scale } = this.options;
     ctx.save();
-    // Diverges from server: SceneCompositor ignores a text layer's own opacity and blend mode.
     ctx.globalAlpha = node.opacity;
     ctx.globalCompositeOperation = COMPOSITE_OPERATION[node.blendMode];
     ctx.textBaseline = "alphabetic";

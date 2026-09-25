@@ -75,6 +75,30 @@ describe("renderScene", () => {
     near(client(40, 40), [127, 127, 255]);
   });
 
+  it("matches the server for a text layer's own opacity and blend mode", async () => {
+    const text = {
+      ...base("t", { left: 0, top: 0, right: 100, bottom: 100 }, { opacity: 0.5, blendMode: "multiply" }),
+      type: "text",
+      alignment: "left",
+      boxMode: "point",
+      frame: { transform: translate(0, 80), box: null },
+      runs: [{ text: "WWWW", fontName: "Arial", fontSize: 80, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    } as SceneNode;
+    const graph = graphOf([pixel("red", { left: 0, top: 0, right: 100, bottom: 100 }), text]);
+    const { client, server } = await renderBoth(graph, assets);
+    let sawInk = false;
+    for (let x = 0; x < 100; x += 5) {
+      for (let y = 20; y < 90; y += 5) {
+        const c = client(x, y);
+        const s = server(x, y);
+        c.forEach((v, i) => expect(Math.abs(v - s[i]!)).toBeLessThanOrEqual(2));
+        // The background is stretched to solid red; fully opaque black text with normal blending would zero every channel.
+        if (c[0]! > 0 || c[1]! > 0) sawInk = true;
+      }
+    }
+    expect(sawInk).toBe(true);
+  });
+
   it("lets view-only visibility hide authored-visible layers and reveal authored-hidden ones", async () => {
     const graph = graphOf([pixel("bg", { left: 0, top: 0, right: 100, bottom: 100 }), pixel("hidden", { left: 0, top: 0, right: 100, bottom: 100 }, { visible: false })]);
     const { client } = await renderBoth(graph, assets, { visibility: new Map([["hidden", true]]) });
@@ -156,12 +180,14 @@ describe("renderScene", () => {
     expect(viewport.getImageData(49, 49, 1, 1).data[3]).toBe(255);
   });
 
-  it("honors clipping for top-level layers (intentional divergence from the server)", async () => {
+  it("honors clipping for top-level layers, matching the server", async () => {
     const graph = graphOf([pixel("red", { left: 0, top: 0, right: 40, bottom: 40 }), pixel("blue", { left: 20, top: 20, right: 80, bottom: 80 }, { clipping: true })]);
-    const { client } = await renderBoth(graph, assets);
+    const { client, server } = await renderBoth(graph, assets);
     expect(client(30, 30)).toEqual([0, 0, 255, 255]);
     expect(client(60, 60)[3]).toBe(0);
-    expect(exportDivergences(graph, graph.root[1]!)).toEqual(["top-level-clipping"]);
+    expect(server(30, 30)).toEqual([0, 0, 255, 255]);
+    expect(server(60, 60)[3]).toBe(0);
+    expect(exportDivergences(graph, graph.root[1]!)).toEqual([]);
     expect(exportDivergences(graph, graph.root[0]!)).toEqual([]);
   });
 
@@ -200,7 +226,7 @@ describe("renderScene", () => {
     expect(long.bottom).toBeCloseTo(40 + 5);
   });
 
-  it("flags text styling the server compositor doesn't apply yet", () => {
+  it("flags only text styling the server compositor doesn't apply yet (tracking; opacity and blend mode are applied server-side)", () => {
     const text = {
       ...base("t", { left: 0, top: 0, right: 200, bottom: 30 }, { opacity: 0.5 }),
       type: "text",
@@ -208,7 +234,7 @@ describe("renderScene", () => {
       boxMode: "point",
       runs: [{ text: "Jane", fontName: "Arial", fontSize: 20, tracking: 50, color: { r: 0, g: 0, b: 0, a: 1 } }],
     } as SceneNode;
-    expect(exportDivergences(graphOf([text]), text)).toEqual(["text-tracking", "text-opacity"]);
+    expect(exportDivergences(graphOf([text]), text)).toEqual(["text-tracking"]);
   });
 
   it("tells a missing font from an installed one by measuring against generic fallbacks", () => {

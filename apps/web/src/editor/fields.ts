@@ -70,9 +70,6 @@ export function checkText(ctx: Ctx2D, node: TextLayerNode, text: string, rules: 
 
 const DIVERGENCE_NOTES: Record<ExportDivergence, string> = {
   "text-tracking": "Letter spacing shows here but isn't applied in exports yet, so exported text sits tighter and may wrap differently.",
-  "text-opacity": "This text's transparency shows here but exports draw it fully opaque.",
-  "text-blend": "This text's blend mode shows here but exports draw it normally.",
-  "top-level-clipping": "This layer is masked by the one beneath it here, but exports don't apply that mask yet.",
 };
 
 /** Ways this field could look different in the final export than on the canvas, in plain words. */

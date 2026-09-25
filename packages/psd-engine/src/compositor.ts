@@ -74,8 +74,8 @@ export class SceneCompositor {
     const ctx = canvas.getContext("2d");
     const warnings: RenderWarning[] = [];
 
-    for (const node of graph.root) {
-      await this.paintNode(ctx, node, scale, overridesByNode, warnings);
+    for (const unit of this.resolveClipStacks(graph.root)) {
+      await this.paintClipUnit(ctx, unit, scale, overridesByNode, warnings);
     }
 
     return { png: canvas.toBuffer("image/png"), width, height, warnings };
@@ -281,6 +281,8 @@ export class SceneCompositor {
       },
     };
     const { transform: t, lines } = layoutText(node, runs, measure, override?.type === "text" ? fieldWrapWidth(node) : authoredWrapWidth(node));
+    ctx.globalAlpha = node.opacity;
+    (ctx as unknown as { globalCompositeOperation: string }).globalCompositeOperation = node.blendMode;
     ctx.textBaseline = "alphabetic";
     ctx.transform(scale, 0, 0, scale, 0, 0);
     ctx.transform(t.m00, t.m10, t.m01, t.m11, t.m02, t.m12);
