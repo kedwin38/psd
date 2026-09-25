@@ -53,6 +53,7 @@ export class TemplatesService {
 
   async listAllForAdmin() {
     return this.prisma.template.findMany({
+      where: { deletedAt: null },
       include: {
         currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } },
         versions: { select: { id: true, versionNo: true, ingestStatus: true, publishedAt: true, _count: { select: { fields: true } } }, orderBy: { versionNo: "desc" } },
@@ -63,24 +64,27 @@ export class TemplatesService {
 
   async listPublished(categoryId?: string) {
     return this.prisma.template.findMany({
-      where: { status: TemplateStatus.PUBLISHED, ...(categoryId ? { categoryId } : {}) },
+      where: { status: TemplateStatus.PUBLISHED, deletedAt: null, ...(categoryId ? { categoryId } : {}) },
       include: { currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } } },
       orderBy: { updatedAt: "desc" },
     });
   }
 
   async get(id: string) {
-    const template = await this.prisma.template.findUnique({
-      where: { id },
+    const template = await this.prisma.template.findFirst({
+      where: { id, deletedAt: null },
       include: { currentVersion: true },
     });
     if (!template) throw new NotFoundException("Template not found.");
     return template;
   }
 
+  private async assertCategoryExists(categoryId: string) {
+    if (!(await this.prisma.templateCategory.findUnique({ where: { id: categoryId } }))) throw new BadRequestException("Unknown category.");
+  }
+
   async create(dto: CreateTemplateDto, actorId: string) {
-    const category = await this.prisma.templateCategory.findUnique({ where: { id: dto.categoryId } });
-    if (!category) throw new BadRequestException("Unknown category.");
+    await this.assertCategoryExists(dto.categoryId);
     const template = await this.prisma.template.create({
       data: { name: dto.name, categoryId: dto.categoryId, visibilityScope: dto.visibilityScope, status: TemplateStatus.DRAFT },
     });
@@ -90,9 +94,25 @@ export class TemplatesService {
 
   async update(id: string, dto: UpdateTemplateDto, actorId: string) {
     await this.get(id);
+    if (dto.categoryId) await this.assertCategoryExists(dto.categoryId);
     const template = await this.prisma.template.update({ where: { id }, data: dto });
     await this.audit.record({ actorId, action: "template.updated", resourceType: "Template", resourceId: id, metadata: dto });
     return template;
+  }
+
+  /**
+   * Projects pin a version and render from its scene graph and fields, so a template they use only leaves the catalog
+   * (they keep opening and exporting); one nobody used is removed with its versions.
+   */
+  async remove(id: string, actorId: string) {
+    const template = await this.get(id);
+    const projectCount = await this.prisma.project.count({ where: { templateId: id } });
+    if (projectCount > 0) {
+      await this.prisma.template.update({ where: { id }, data: { deletedAt: new Date() } });
+    } else {
+      await this.prisma.template.delete({ where: { id } });
+    }
+    await this.audit.record({ actorId, action: "template.deleted", resourceType: "Template", resourceId: id, metadata: { name: template.name, projectCount } });
   }
 
   async uploadVersion(templateId: string, file: { buffer: Buffer; originalname: string; mimetype: string }, actorId: string) {

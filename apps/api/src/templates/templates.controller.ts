@@ -60,6 +60,14 @@ export class TemplatesController {
   }
 
   @Roles(...ADMIN_ROLES)
+  @StepUp()
+  @Delete(":id")
+  async remove(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
+    await this.templates.remove(id, user.id);
+    return { ok: true };
+  }
+
+  @Roles(...ADMIN_ROLES)
   @Post(":id/versions")
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: MAX_PSD_UPLOAD_BYTES } }))
   uploadVersion(@Param("id") id: string, @UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthenticatedUser) {
