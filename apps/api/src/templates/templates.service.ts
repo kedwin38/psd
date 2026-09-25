@@ -16,6 +16,7 @@ import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, 
 import { syncFieldsWithLocks, type FieldSyncResult } from "./field-sync";
 
 const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
+const THUMBNAIL_MAX_DIMENSION = 640;
 
 const PSD_MAGIC = Buffer.from("8BPS", "ascii");
 export const MAX_PSD_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -271,13 +272,39 @@ export class TemplatesService {
     });
   }
 
-  /** Renders the template exactly as authored, no field overrides — the admin's field-mapping preview. */
-  async preview(templateId: string, versionId: string): Promise<{ dataUrl: string }> {
+  /** Renders the template exactly as authored, no field overrides, as a PNG no larger than `maxDimension` on either side. */
+  private async renderAsAuthored(templateId: string, versionId: string, maxDimension: number): Promise<Buffer> {
     const sceneGraph = await this.getSceneGraph(templateId, versionId);
-    const scale = Math.min(1, ADMIN_PREVIEW_MAX_DIMENSION / Math.max(sceneGraph.width, sceneGraph.height));
+    const scale = Math.min(1, maxDimension / Math.max(sceneGraph.width, sceneGraph.height));
     const compositor = new SceneCompositor(new DbBackedAssetSource(this.prisma, this.storage));
-    const result = await compositor.render(sceneGraph, { scale });
-    return { dataUrl: `data:image/png;base64,${result.png.toString("base64")}` };
+    return (await compositor.render(sceneGraph, { scale })).png;
+  }
+
+  /** The admin's field-mapping preview. */
+  async preview(templateId: string, versionId: string): Promise<{ dataUrl: string }> {
+    const png = await this.renderAsAuthored(templateId, versionId, ADMIN_PREVIEW_MAX_DIMENSION);
+    return { dataUrl: `data:image/png;base64,${png.toString("base64")}` };
+  }
+
+  /** The catalog card image. A published version's artwork can't change, so it's rendered once and kept. */
+  async thumbnail(templateId: string, versionId: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    const version = await this.getVersion(templateId, versionId);
+    if (!version.publishedAt) throw new NotFoundException("Only published template versions have a thumbnail.");
+    if (version.thumbnailAssetId) {
+      const asset = await this.prisma.asset.findUniqueOrThrow({ where: { id: version.thumbnailAssetId } });
+      return { bytes: await this.storage.getAssetBytes(asset.storageKey), mimeType: asset.mimeType };
+    }
+
+    const png = await this.renderAsAuthored(templateId, versionId, THUMBNAIL_MAX_DIMENSION);
+    const { data, info } = await sharp(png).webp({ quality: 82 }).toBuffer({ resolveWithObject: true });
+    const asset = await this.storage.storeAsset({ data, mimeType: "image/webp", ownerType: AssetOwnerType.TEMPLATE_THUMBNAIL, hint: `thumb_${versionId}`, width: info.width, height: info.height });
+    // Concurrent first views each render one: the first saved is kept and the rest are discarded.
+    const { count } = await this.prisma.templateVersion.updateMany({ where: { id: versionId, thumbnailAssetId: null }, data: { thumbnailAssetId: asset.id } });
+    if (count === 0) {
+      await this.prisma.asset.delete({ where: { id: asset.id } });
+      await this.storage.deleteByKey(asset.storageKey);
+    }
+    return { bytes: data, mimeType: "image/webp" };
   }
 
   async listFields(templateId: string, versionId: string) {
