@@ -18,6 +18,7 @@ import { ProjectsModule } from "./projects/projects.module";
 import { ExportsModule } from "./exports/exports.module";
 import { QueueModule } from "./queue/queue.module";
 import { AdminModule } from "./admin/admin.module";
+import { SettingsModule } from "./settings/settings.module";
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { AdminModule } from "./admin/admin.module";
     ProjectsModule,
     ExportsModule,
     AdminModule,
+    SettingsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },

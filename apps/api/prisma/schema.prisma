@@ -280,6 +280,7 @@ enum AssetOwnerType {
   USER_UPLOAD
   EXPORT_OUTPUT
   TEMPLATE_THUMBNAIL
+  WATERMARK
 }
 
 model Asset {
@@ -299,9 +300,26 @@ model Asset {
   templateVersions TemplateVersion[] @relation("TemplateVersionPsd")
   thumbnailOf      TemplateVersion?  @relation("TemplateVersionThumbnail")
   exportJobs       ExportJob[] @relation("ExportOutputAsset")
+  watermarkOf      AppSettings?      @relation("AppSettingsWatermark")
 
   @@index([projectId])
   @@map("assets")
+}
+
+// ---------------------------------------------------------------------------
+// App-wide settings (spec: site watermark) — a single fixed-id row so there's
+// exactly one live configuration, read by every editing surface.
+// ---------------------------------------------------------------------------
+
+model AppSettings {
+  id               String   @id @default("singleton")
+  // A faint tiled overlay shown over the live canvas (never baked into an export) to deter screenshot piracy.
+  watermarkAsset   Asset?   @relation("AppSettingsWatermark", fields: [watermarkAssetId], references: [id], onDelete: SetNull)
+  watermarkAssetId String?  @unique
+  watermarkOpacity Float    @default(0.15)
+  updatedAt        DateTime @updatedAt
+
+  @@map("app_settings")
 }
 
 // ---------------------------------------------------------------------------

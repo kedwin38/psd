@@ -796,6 +796,7 @@ body.is-resizing .ws-body { transition: none; }
 }
 .scene-canvas-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .scene-canvas-overlay { touch-action: none; }
+.scene-canvas-watermark { pointer-events: none; }
 .scene-artboard-label {
   position: absolute; display: flex; align-items: baseline; gap: 8px; max-width: 60%;
   font-size: var(--fs-xs); font-weight: 500; color: var(--canvas-text-dim); pointer-events: none; white-space: nowrap; overflow: hidden;
@@ -846,6 +847,9 @@ body.is-resizing .ws-body { transition: none; }
   background-image: conic-gradient(#e2e2e2 25%, transparent 0 50%, #e2e2e2 0 75%, transparent 0);
   background-size: 16px 16px;
 }
+
+.watermark-preview { position: relative; height: 220px; border-radius: var(--r-md); overflow: hidden; box-shadow: inset 0 0 0 1px var(--border); }
+.watermark-preview-tiles { position: absolute; inset: 0; background-repeat: repeat; background-size: 120px auto; }
 
 /* In-place text editor */
 .text-edit-overlay {

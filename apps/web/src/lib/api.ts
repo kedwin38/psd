@@ -173,7 +173,7 @@ export const api = {
   patch: <T>(path: string, body?: unknown, stepUpToken?: string) => request<T>(path, { method: "PATCH", body, stepUpToken }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
   del: <T>(path: string, stepUpToken?: string) => request<T>(path, { method: "DELETE", stepUpToken }),
-  upload: <T>(path: string, form: FormData, onUploadProgress?: (fraction: number) => void) =>
-    request<T>(path, { method: "POST", body: form, isFormData: true, onUploadProgress }),
+  upload: <T>(path: string, form: FormData, stepUpToken?: string, onUploadProgress?: (fraction: number) => void) =>
+    request<T>(path, { method: "POST", body: form, isFormData: true, stepUpToken, onUploadProgress }),
   blob: (path: string, signal?: AbortSignal) => send(path, { signal }).then((res) => res.blob()),
 };

@@ -79,7 +79,7 @@ export function TemplatesAdminPage() {
     form.append("file", file);
     setUploading({ target, fraction: 0 });
     try {
-      await api.upload(`/templates/${templateId}/versions`, form, (fraction) => setUploading({ target, fraction }));
+      await api.upload(`/templates/${templateId}/versions`, form, undefined, (fraction) => setUploading({ target, fraction }));
     } finally {
       setUploading(null);
     }

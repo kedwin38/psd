@@ -18,6 +18,7 @@ import { AlertTriangle, CheckCircle2, Maximize, Minus, Plus, TextCursorInput, XC
 import { isTypingTarget } from "../lib/keyboard";
 import { findNode } from "./sceneTree";
 import { fitRect, toScene, zoomAround, type View } from "./viewport";
+import type { WatermarkOverlay } from "./useWatermark";
 
 /** Breathing room around the artboard when fitted, as in any design tool (and room for the artboard label). */
 const PADDING = 48;
@@ -80,6 +81,7 @@ export function SceneCanvas({
   loading = false,
   statusTone = "busy",
   artboardLabel,
+  watermark = null,
   ref,
 }: {
   graph: SceneGraph;
@@ -103,11 +105,14 @@ export function SceneCanvas({
   statusTone?: "busy" | "error";
   /** Shown above the artboard's top-left corner, like a frame name in a design tool. */
   artboardLabel?: string;
+  /** The admin-configured site watermark (if any), tiled over the viewport above everything else, never over an export. */
+  watermark?: WatermarkOverlay | null;
   ref?: Ref<SceneCanvasHandle>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const watermarkRef = useRef<HTMLCanvasElement>(null);
   const measureRef = useRef<Ctx2D | null>(null);
   const [box, setBox] = useState({ width: 0, height: 0 });
   /** null follows "fit to screen" across resizes; set once the user zooms or pans. */
@@ -231,6 +236,21 @@ export function SceneCanvas({
       stroke(ctx, r, dpr * 2, ok ? "#2ecc71" : "#e74c3c");
     }
   }, [selected, hover, focused, focusInk?.left, focusInk?.top, focusInk?.right, focusInk?.bottom, runBoxes, focus?.run, drag, boundsOf, v.zoom, v.x, v.y, dpr, pixelWidth, pixelHeight, ready]);
+
+  // Screen-space, not scene-space: tiled across the viewport so panning can't crop it out, and re-tiled to stay
+  // legible whatever the zoom. Purely a client-side pixel overlay — never part of the scene graph the server renders.
+  useEffect(() => {
+    const ctx = watermarkRef.current?.getContext("2d");
+    if (!ctx || !ready || !watermark) return;
+    const pattern = ctx.createPattern(watermark.image, "repeat");
+    if (!pattern) return;
+    ctx.clearRect(0, 0, pixelWidth, pixelHeight);
+    ctx.save();
+    ctx.globalAlpha = watermark.opacity;
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+    ctx.restore();
+  }, [watermark, pixelWidth, pixelHeight, ready]);
 
   // On the container, so wheeling over DOM overlays (e.g. an in-place text editor) still zooms.
   useEffect(() => {
@@ -477,6 +497,16 @@ export function SceneCanvas({
         onDoubleClick={(e) => (onActivate ? activate(local(e)) : focusText(local(e)))}
       />
       {ready && renderOverlay?.(v)}
+      {watermark && ready && (
+        <canvas
+          ref={watermarkRef}
+          className="scene-canvas-layer scene-canvas-watermark"
+          width={pixelWidth}
+          height={pixelHeight}
+          aria-hidden="true"
+          style={{ pointerEvents: "none" }}
+        />
+      )}
       {hover && !focused && !drag && (
         <div className="scene-canvas-chip hover">
           <span className="chip-dot" aria-hidden="true" />
