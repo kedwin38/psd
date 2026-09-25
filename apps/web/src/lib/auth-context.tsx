@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, setUnauthorizedHandler, tryRefresh } from "./api";
+import { api, setMfaSetupRequiredHandler, setUnauthorizedHandler, tryRefresh } from "./api";
 import type { AuthenticatedUser } from "./types";
 
 interface AuthContextValue {
@@ -32,8 +32,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null));
+    // /auth/me stays answerable during a forced enrollment and says so, which swaps the app for the setup screen.
+    setMfaSetupRequiredHandler(() => {
+      api.get<AuthenticatedUser>("/auth/me").then(setUser, () => undefined);
+    });
     refreshUser().finally(() => setLoading(false));
-    return () => setUnauthorizedHandler(null);
+    return () => {
+      setUnauthorizedHandler(null);
+      setMfaSetupRequiredHandler(null);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

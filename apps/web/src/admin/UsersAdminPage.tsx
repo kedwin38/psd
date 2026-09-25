@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, X } from "lucide-react";
+import { Search, UserPlus, X } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth-context";
 import type { AdminUser, RoleAssignment, RoleName, UserStatus } from "../lib/types";
@@ -19,6 +19,27 @@ const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ?
 
 const isScoped = (a: RoleAssignment) => a.organizationId !== null || a.categoryId !== null;
 
+interface NewUser {
+  email: string;
+  displayName: string;
+  role: RoleName;
+  password: string;
+}
+
+const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+
+function generatePassword(length = 20): string {
+  // Rejection sampling keeps every character equally likely.
+  const limit = 256 - (256 % PASSWORD_ALPHABET.length);
+  let out = "";
+  while (out.length < length) {
+    for (const byte of crypto.getRandomValues(new Uint8Array(length))) {
+      if (byte < limit && out.length < length) out += PASSWORD_ALPHABET[byte % PASSWORD_ALPHABET.length];
+    }
+  }
+  return out;
+}
+
 export function UsersAdminPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<AdminUser[] | null>(null);
@@ -28,6 +49,7 @@ export function UsersAdminPage() {
   const [pending, setPending] = useState<string | null>(null);
   const [roleToAdd, setRoleToAdd] = useState<Record<string, RoleName | "">>({});
   const [confirmingSuspend, setConfirmingSuspend] = useState<AdminUser | null>(null);
+  const [creating, setCreating] = useState(false);
   const { stepUp, dialog: stepUpDialog } = useStepUp();
 
   const load = () => api.get<AdminUser[]>("/admin/users").then(setUsers);
@@ -68,8 +90,18 @@ export function UsersAdminPage() {
   const setStatus = (user: AdminUser, status: "ACTIVE" | "SUSPENDED") =>
     change(user.id, (token) => api.patch(`/admin/users/${user.id}/status`, { status }, token), "Could not change the account's status.");
 
+  /** Re-authenticates, then creates the account; resolves false if the admin cancels the step-up. */
+  const createUser = async (body: NewUser) => {
+    const stepUpToken = await stepUp();
+    if (!stepUpToken) return false;
+    await api.post("/admin/users", body, stepUpToken);
+    await load();
+    return true;
+  };
+
   return (
     <div>
+      {creating && <CreateUserDialog onCreate={createUser} onClose={() => setCreating(false)} />}
       {stepUpDialog}
       {confirmingSuspend && (
         <SuspendDialog
@@ -86,9 +118,15 @@ export function UsersAdminPage() {
           <h1>Users</h1>
           <p className="subtitle">Everyone who has signed up: their roles, and whether they can sign in.</p>
         </div>
-        <div className="search-field users-search">
-          <Search size={14} aria-hidden="true" />
-          <input type="search" placeholder="Search by name or email" aria-label="Search users" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <div className="row">
+          <div className="search-field users-search">
+            <Search size={14} aria-hidden="true" />
+            <input type="search" placeholder="Search by name or email" aria-label="Search users" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          <button type="button" className="primary" onClick={() => setCreating(true)}>
+            <UserPlus size={15} aria-hidden="true" />
+            Create user
+          </button>
         </div>
       </div>
       {error && (
@@ -160,7 +198,17 @@ export function UsersAdminPage() {
                     </form>
                   )}
                 </td>
-                <td>{u.mfaEnrolled ? "Enrolled" : <span className="hint">Not enrolled</span>}</td>
+                <td>
+                  {u.mfaEnrolled ? (
+                    "Enrolled"
+                  ) : u.mfaSetupRequired ? (
+                    <span className="hint" title="Has an admin role, so it can't do anything until it enrolls an authenticator app.">
+                      Setup required
+                    </span>
+                  ) : (
+                    <span className="hint">Not enrolled</span>
+                  )}
+                </td>
                 <td className="hint">{new Date(u.createdAt).toLocaleDateString()}</td>
                 <td>
                   {u.status === "SUSPENDED" ? (
@@ -234,6 +282,140 @@ function SuspendDialog({ user, onCancel, onConfirm }: { user: AdminUser; onCance
           </button>
         </div>
       </div>
+    </dialog>
+  );
+}
+
+function CreateUserDialog({ onCreate, onClose }: { onCreate: (user: NewUser) => Promise<boolean>; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [form, setForm] = useState<NewUser>({ email: "", displayName: "", role: "END_USER", password: "" });
+  const [showPassword, setShowPassword] = useState(false);
+  const [created, setCreated] = useState<NewUser | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => dialog.current?.showModal(), []);
+
+  const set = <K extends keyof NewUser>(key: K, value: NewUser[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      if (await onCreate(form)) setCreated(form);
+    } catch (err) {
+      setError(errorText(err, "Could not create the account."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialog}
+      className="step-up-dialog create-user-dialog"
+      aria-labelledby="create-user-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        if (!busy) onClose();
+      }}
+    >
+      {created ? (
+        <div className="stack">
+          <h2 id="create-user-title">Account created</h2>
+          <p className="hint">
+            Give {created.displayName} their password now: it isn't stored anywhere it can be read back, so this is the only time it's shown.
+            {created.role !== "END_USER" && " Their first sign-in with it will make them set up an authenticator app before anything else."}
+          </p>
+          <div className="handover" aria-label="New account's sign-in details">
+            <div>{created.email}</div>
+            <code>{created.password}</code>
+          </div>
+          <div className="row end">
+            <button
+              type="button"
+              onClick={async () => {
+                await navigator.clipboard.writeText(created.password);
+                setCopied(true);
+              }}
+            >
+              {copied ? "Copied" : "Copy password"}
+            </button>
+            <button type="button" className="primary" onClick={onClose} autoFocus>
+              Done
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="stack">
+          <h2 id="create-user-title">Create a user</h2>
+          <p className="hint">They'll sign in with the password you set here.</p>
+          {error && (
+            <div className="error-box" role="alert">
+              {error}
+            </div>
+          )}
+          <div>
+            <label htmlFor="new-user-name">Full name</label>
+            <input id="new-user-name" type="text" value={form.displayName} onChange={(e) => set("displayName", e.target.value)} required autoFocus />
+          </div>
+          <div>
+            <label htmlFor="new-user-email">Email</label>
+            <input id="new-user-email" type="email" value={form.email} onChange={(e) => set("email", e.target.value)} required />
+          </div>
+          <div>
+            <label htmlFor="new-user-role">Role</label>
+            <select id="new-user-role" value={form.role} onChange={(e) => set("role", e.target.value as RoleName)}>
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABEL[r]}
+                </option>
+              ))}
+            </select>
+            {form.role !== "END_USER" && <p className="hint">Admin roles must set up an authenticator app at their first sign-in.</p>}
+          </div>
+          <div>
+            <label htmlFor="new-user-password">Initial password</label>
+            <div className="row password-field">
+              <input
+                id="new-user-password"
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(e) => set("password", e.target.value)}
+                minLength={12}
+                maxLength={200}
+                autoComplete="new-password"
+                required
+              />
+              <button type="button" className="sm" onClick={() => setShowPassword((v) => !v)}>
+                {showPassword ? "Hide" : "Show"}
+              </button>
+              <button
+                type="button"
+                className="sm"
+                onClick={() => {
+                  set("password", generatePassword());
+                  setShowPassword(true);
+                }}
+              >
+                Generate
+              </button>
+            </div>
+            <p className="hint">At least 12 characters.</p>
+          </div>
+          <div className="row end">
+            <button type="button" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button type="submit" className="primary" disabled={busy}>
+              {busy && <Spinner />}
+              Create account
+            </button>
+          </div>
+        </form>
+      )}
     </dialog>
   );
 }

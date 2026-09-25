@@ -4,6 +4,7 @@ import { Layout } from "./components/Layout";
 import { LoginPage } from "./auth/LoginPage";
 import { RegisterPage } from "./auth/RegisterPage";
 import { TotpEnrollPage } from "./auth/TotpEnrollPage";
+import { MfaSetupPage } from "./auth/MfaSetupPage";
 import { GalleryPage } from "./editor/GalleryPage";
 import { ProjectEditorPage } from "./editor/ProjectEditorPage";
 import { CategoriesAdminPage } from "./admin/CategoriesAdminPage";
@@ -22,6 +23,7 @@ function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?
       </div>
     );
   if (!user) return <Navigate to="/login" replace />;
+  if (user.mfaSetupRequired) return <MfaSetupPage />;
   if (roles && !roles.some((r) => user.roles.includes(r))) return <Navigate to="/" replace />;
   return <>{children}</>;
 }

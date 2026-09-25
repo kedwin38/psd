@@ -406,6 +406,11 @@ tbody tr:hover td { background: var(--gray-25); }
 .role-chip button.icon-btn.sm { width: 18px; height: 18px; border-radius: var(--r-pill); color: inherit; }
 .user-role-add { gap: 6px; margin-top: 8px; }
 .user-role-add select { height: 28px; width: auto; font-size: var(--fs-sm); }
+.create-user-dialog { width: min(440px, calc(100vw - 32px)); }
+.password-field { gap: 6px; }
+.password-field input { flex: 1; min-width: 0; font-family: ui-monospace, monospace; }
+.handover { background: var(--bg); padding: 12px; border-radius: var(--r-md); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.handover code { font-size: var(--fs-md); }
 
 /* ---------- App shell (console) ---------- */
 .app-shell { display: flex; min-height: 100vh; }

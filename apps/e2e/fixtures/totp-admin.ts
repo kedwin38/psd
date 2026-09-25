@@ -38,7 +38,7 @@ export function totpCode(secretBase32: string): string {
 /** Signs in through the login page's password + authenticator code path. */
 export async function signInWithPasswordAndTotp(page: Page, admin: SeededAdmin): Promise<void> {
   await page.goto("/login");
-  await page.getByRole("button", { name: "Use password + authenticator code instead" }).click();
+  await page.getByRole("button", { name: "Sign in with a password instead" }).click();
   await page.locator("#email-password").fill(admin.email);
   await page.getByLabel("Password").fill(admin.password);
   await page.getByRole("button", { name: "Continue" }).click();

@@ -25,8 +25,14 @@ export async function loginWithPasskey(email: string): Promise<AuthenticatedUser
   return api.get<AuthenticatedUser>("/auth/me");
 }
 
-export async function passwordLoginStart(email: string, password: string): Promise<{ pendingToken: string }> {
-  return api.post("/auth/login/password", { email, password });
+type PasswordLoginStart = { mfaRequired: true; pendingToken: string } | { mfaRequired: false; accessToken: string };
+
+/** Checks the password; the API then either asks for an authenticator code or, for an account that needs none, signs in. */
+export async function passwordLoginStart(email: string, password: string): Promise<{ pendingToken: string } | { user: AuthenticatedUser }> {
+  const result = await request<PasswordLoginStart>("/auth/login/password", { method: "POST", body: { email, password } });
+  if (result.mfaRequired) return { pendingToken: result.pendingToken };
+  setAccessToken(result.accessToken);
+  return { user: await api.get<AuthenticatedUser>("/auth/me") };
 }
 
 export async function passwordLoginVerifyTotp(pendingToken: string, code: string): Promise<AuthenticatedUser> {

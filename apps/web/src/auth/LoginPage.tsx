@@ -36,8 +36,13 @@ export function LoginPage() {
     setError(null);
     setBusy(true);
     try {
-      const { pendingToken } = await passwordLoginStart(email, password);
-      setPendingToken(pendingToken);
+      const result = await passwordLoginStart(email, password);
+      if ("pendingToken" in result) {
+        setPendingToken(result.pendingToken);
+        return;
+      }
+      setUser(result.user);
+      navigate("/");
     } catch (err) {
       setError(err instanceof ApiError ? (err.detail ?? err.title) : "Sign-in failed.");
     } finally {
@@ -85,7 +90,7 @@ export function LoginPage() {
             </form>
             <p className="hint" style={{ marginTop: 14 }}>
               <button className="link" onClick={() => setShowFallback(true)}>
-                Use password + authenticator code instead
+                Sign in with a password instead
               </button>
             </p>
           </>
@@ -101,7 +106,7 @@ export function LoginPage() {
               <label htmlFor="password">Password</label>
               <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             </div>
-            <p className="hint">This path requires TOTP to already be enrolled — passwords alone are never enough.</p>
+            <p className="hint">If your account uses an authenticator app, you'll be asked for its code next.</p>
             <button type="submit" className="primary" disabled={busy}>
               Continue
             </button>

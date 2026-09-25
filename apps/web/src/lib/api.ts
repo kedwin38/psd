@@ -5,6 +5,7 @@ const PROACTIVE_REFRESH_AT = 0.8;
 
 let accessToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;
+let onMfaSetupRequired: (() => void) | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let refreshing: Promise<string | null> | null = null;
 
@@ -29,6 +30,12 @@ export function getAccessToken(): string | null {
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
 }
+/** Called when the API refuses a request until the account enrolls TOTP (e.g. an admin role was just granted). */
+export function setMfaSetupRequiredHandler(handler: (() => void) | null): void {
+  onMfaSetupRequired = handler;
+}
+
+const MFA_SETUP_REQUIRED = "MFA_SETUP_REQUIRED";
 
 export class ApiError extends Error {
   constructor(
@@ -36,6 +43,7 @@ export class ApiError extends Error {
     public title: string,
     public detail?: string,
     public errors?: string[],
+    public code?: string,
   ) {
     super(detail ?? title);
   }
@@ -140,13 +148,14 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   }
 
   if (!res.ok) {
-    let problem: { title?: string; detail?: string; errors?: string[] } = {};
+    let problem: { title?: string; detail?: string; errors?: string[]; code?: string } = {};
     try {
       problem = await res.json();
     } catch {
       /* non-JSON error body */
     }
-    throw new ApiError(res.status, problem.title ?? res.statusText, problem.detail, problem.errors);
+    if (res.status === 403 && problem.code === MFA_SETUP_REQUIRED) onMfaSetupRequired?.();
+    throw new ApiError(res.status, problem.title ?? res.statusText, problem.detail, problem.errors, problem.code);
   }
   return res;
 }
