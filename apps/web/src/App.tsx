@@ -13,6 +13,8 @@ import { TemplateWorkspacePage } from "./admin/TemplateWorkspacePage";
 import { AuditLogPage } from "./admin/AuditLogPage";
 import { UsersAdminPage } from "./admin/UsersAdminPage";
 import { SettingsAdminPage } from "./admin/SettingsAdminPage";
+import { MessagesAdminPage } from "./admin/MessagesAdminPage";
+import { MessagesPage } from "./messages/MessagesPage";
 import type { RoleName } from "./lib/types";
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: RoleName[] }) {
@@ -46,6 +48,7 @@ export default function App() {
       >
         <Route path="/" element={<GalleryPage />} />
         <Route path="/projects/:projectId" element={<ProjectEditorPage />} />
+        <Route path="/messages" element={<MessagesPage />} />
         <Route path="/account/totp" element={<TotpEnrollPage />} />
 
         <Route
@@ -85,6 +88,14 @@ export default function App() {
           element={
             <ProtectedRoute roles={["SUPER_ADMIN"]}>
               <UsersAdminPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/messages"
+          element={
+            <ProtectedRoute roles={["SUPER_ADMIN", "CONTENT_ADMIN", "ORG_ADMIN"]}>
+              <MessagesAdminPage />
             </ProtectedRoute>
           }
         />

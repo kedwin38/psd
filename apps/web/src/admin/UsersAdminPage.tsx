@@ -48,6 +48,7 @@ export function UsersAdminPage() {
   // The user whose change is in flight; their row's controls wait for it.
   const [pending, setPending] = useState<string | null>(null);
   const [roleToAdd, setRoleToAdd] = useState<Record<string, RoleName | "">>({});
+  const [downloadsToAdd, setDownloadsToAdd] = useState<Record<string, string>>({});
   const [confirmingSuspend, setConfirmingSuspend] = useState<AdminUser | null>(null);
   const [creating, setCreating] = useState(false);
   const { stepUp, dialog: stepUpDialog } = useStepUp();
@@ -89,6 +90,11 @@ export function UsersAdminPage() {
 
   const setStatus = (user: AdminUser, status: "ACTIVE" | "SUSPENDED") =>
     change(user.id, (token) => api.patch(`/admin/users/${user.id}/status`, { status }, token), "Could not change the account's status.");
+
+  const grantDownloads = async (user: AdminUser, add: number) => {
+    const saved = await change(user.id, (token) => api.patch(`/admin/users/${user.id}/downloads`, { add }, token), "Could not grant more downloads.");
+    if (saved) setDownloadsToAdd((prev) => ({ ...prev, [user.id]: "" }));
+  };
 
   /** Re-authenticates, then creates the account; resolves false if the admin cancels the step-up. */
   const createUser = async (body: NewUser) => {
@@ -140,6 +146,7 @@ export function UsersAdminPage() {
             <th>User</th>
             <th>Status</th>
             <th>Roles</th>
+            <th>Downloads</th>
             <th>MFA</th>
             <th>Signed up</th>
             <th></th>
@@ -199,6 +206,34 @@ export function UsersAdminPage() {
                   )}
                 </td>
                 <td>
+                  <span className={u.downloadsUsed >= u.downloadsAllowed ? "hint danger-text" : "hint"}>
+                    {u.downloadsUsed}/{u.downloadsAllowed}
+                  </span>
+                  <form
+                    className="row user-role-add"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const add = Number(downloadsToAdd[u.id]);
+                      if (add > 0) void grantDownloads(u, add);
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      className="sm downloads-add-input"
+                      aria-label={`Downloads to add for ${u.email}`}
+                      placeholder="+"
+                      disabled={busy}
+                      value={downloadsToAdd[u.id] ?? ""}
+                      onChange={(e) => setDownloadsToAdd((prev) => ({ ...prev, [u.id]: e.target.value }))}
+                    />
+                    <button type="submit" className="sm" disabled={busy || !(Number(downloadsToAdd[u.id]) > 0)} aria-label={`Grant downloads to ${u.email}`}>
+                      Grant
+                    </button>
+                  </form>
+                </td>
+                <td>
                   {u.mfaEnrolled ? (
                     "Enrolled"
                   ) : u.mfaSetupRequired ? (
@@ -235,14 +270,14 @@ export function UsersAdminPage() {
           })}
           {users === null && !error && (
             <tr>
-              <td colSpan={6} className="hint">
+              <td colSpan={7} className="hint">
                 <Spinner /> Loading users…
               </td>
             </tr>
           )}
           {users !== null && visible.length === 0 && (
             <tr>
-              <td colSpan={6} className="hint">
+              <td colSpan={7} className="hint">
                 {users.length === 0 ? "No users yet." : `No users match “${query.trim()}”.`}
               </td>
             </tr>

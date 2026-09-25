@@ -9,6 +9,8 @@ export interface AuthenticatedUser {
   /** Nothing but TOTP enrollment works for this account until it's done. */
   mfaSetupRequired: boolean;
   mfaSetupDeadline: string | null;
+  downloadsAllowed: number;
+  downloadsUsed: number;
 }
 
 export type UserStatus = "ACTIVE" | "SUSPENDED" | "PENDING_VERIFICATION";
@@ -28,6 +30,8 @@ export interface AdminUser {
   status: UserStatus;
   mfaEnrolled: boolean;
   mfaSetupRequired: boolean;
+  downloadsAllowed: number;
+  downloadsUsed: number;
   createdAt: string;
   roles: RoleAssignment[];
 }
@@ -90,6 +94,24 @@ export interface Project {
 export interface WatermarkConfig {
   url: string;
   opacity: number;
+}
+
+export interface Message {
+  id: string;
+  threadUserId: string;
+  authorId: string;
+  authorRole: "END_USER" | "ADMIN";
+  body: string | null;
+  imageAssetId: string | null;
+  createdAt: string;
+  readAt: string | null;
+  author: { displayName: string; email: string };
+}
+
+export interface MessageThread {
+  user: { id: string; email: string; displayName: string };
+  lastMessage: Message | null;
+  unreadCount: number;
 }
 
 export interface ExportJob {

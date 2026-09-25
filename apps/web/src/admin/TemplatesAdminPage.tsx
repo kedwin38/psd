@@ -121,6 +121,24 @@ export function TemplatesAdminPage() {
     }
   };
 
+  const [removingVersion, setRemovingVersion] = useState<string | null>(null);
+
+  const removeVersion = async (template: AdminTemplate, version: AdminTemplate["versions"][number]) => {
+    if (!confirm(`Delete version #${version.versionNo} of “${template.name}”? This can't be undone.`)) return;
+    setError(null);
+    setRemovingVersion(version.id);
+    try {
+      const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
+      await api.del(`/templates/${template.id}/versions/${version.id}`, stepUpToken);
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Could not delete this version."));
+    } finally {
+      setRemovingVersion(null);
+    }
+  };
+
   const publish = async (templateId: string, versionId: string) => {
     setError(null);
     setPublishing(versionId);
@@ -283,6 +301,18 @@ export function TemplatesAdminPage() {
                               <button className="link" onClick={() => navigate(`/admin/templates/${t.id}/versions/${v.id}`)}>
                                 {ready ? "Customize fields →" : "View →"}
                               </button>
+                              {!live && (
+                                <button
+                                  type="button"
+                                  className="sm danger ghost"
+                                  disabled={removingVersion !== null}
+                                  aria-label={`Delete ${t.name} version ${v.versionNo}`}
+                                  title="Delete this version"
+                                  onClick={() => removeVersion(t, v)}
+                                >
+                                  {removingVersion === v.id ? <Spinner /> : "Delete"}
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>

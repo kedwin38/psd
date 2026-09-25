@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useMatch } from "react-router-dom";
-import { Droplets, FolderTree, LayoutGrid, Library, LogOut, ScrollText, ShieldCheck, Users } from "lucide-react";
+import { Droplets, FolderTree, LayoutGrid, Library, LogOut, MessageCircle, ScrollText, ShieldCheck, Users } from "lucide-react";
 import { useAuth } from "../lib/auth-context";
 import { logout } from "../lib/auth-api";
 import type { RoleName } from "../lib/types";
@@ -35,6 +35,10 @@ export function Layout() {
         <NavLink to="/" end>
           <LayoutGrid size={17} aria-hidden="true" />
           Templates
+        </NavLink>
+        <NavLink to={isAdmin ? "/admin/messages" : "/messages"}>
+          <MessageCircle size={17} aria-hidden="true" />
+          {isAdmin ? "Messages" : "Contact support"}
         </NavLink>
         {isAdmin && (
           <>

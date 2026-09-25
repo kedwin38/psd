@@ -61,6 +61,7 @@ export function ProjectEditorPage() {
   const [uploading, setUploading] = useState<ReadonlySet<string>>(new Set());
   const [fileNames, setFileNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
   const [exportFormat, setExportFormat] = useState<ExportJob["outputFormat"]>("PNG");
   const [exportJob, setExportJob] = useState<ExportJob | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -280,6 +281,7 @@ export function ProjectEditorPage() {
   const requestExport = async () => {
     if (!projectId) return;
     setError(null);
+    setQuotaExceeded(false);
     if (invalid) {
       setError(`Fix “${invalid.label}” before exporting: ${textCheck(invalid).error}`);
       return select(invalid.id, true);
@@ -304,6 +306,7 @@ export function ProjectEditorPage() {
       if (job.status === "FAILED") setError(job.error ?? "Export failed.");
     } catch (err) {
       setExportOpen(false);
+      if (err instanceof ApiError && err.status === 403 && err.detail?.includes("downloads")) setQuotaExceeded(true);
       setError(errorMessage(err, "Could not start export."));
     } finally {
       setExporting(false);
@@ -550,7 +553,15 @@ export function ProjectEditorPage() {
           {error && (
             <div className="error-box ws-canvas-banner" role="alert">
               <AlertCircle size={16} aria-hidden="true" />
-              <span>{error}</span>
+              <span>
+                {error}
+                {quotaExceeded && (
+                  <>
+                    {" "}
+                    <Link to="/messages">Contact support</Link>.
+                  </>
+                )}
+              </span>
               <button type="button" className="icon-btn sm dismiss" aria-label="Dismiss" onClick={() => setError(null)}>
                 <X size={15} aria-hidden="true" />
               </button>
