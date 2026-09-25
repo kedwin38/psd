@@ -5,6 +5,7 @@ import { AuthService, type RequestContext } from "./auth.service";
 import { TotpService } from "./totp.service";
 import { Public } from "./decorators/public.decorator";
 import { CurrentUser } from "./decorators/current-user.decorator";
+import { MfaSetupAllowed } from "./decorators/mfa-setup.decorator";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import {
   EmailOnlySchema,
@@ -107,13 +108,16 @@ export class AuthController {
     return { accessToken: pair.accessToken };
   }
 
-  // --- Password + TOTP login (fallback) -------------------------------------
+  // --- Password (+ TOTP) login ---------------------------------------------
 
   @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post("login/password")
-  async passwordLoginStart(@Body(new ZodValidationPipe(PasswordLoginStartSchema)) body: PasswordLoginStartDto, @Req() req: Request) {
-    return this.auth.passwordLoginStart(body.email, body.password, this.ctx(req));
+  async passwordLoginStart(@Body(new ZodValidationPipe(PasswordLoginStartSchema)) body: PasswordLoginStartDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const result = await this.auth.passwordLoginStart(body.email, body.password, this.ctx(req));
+    if (result.mfaRequired) return result;
+    this.setRefreshCookie(res, result);
+    return { mfaRequired: false, accessToken: result.accessToken };
   }
 
   @Public()
@@ -133,11 +137,13 @@ export class AuthController {
 
   // --- TOTP enrollment (authenticated) --------------------------------------
 
+  @MfaSetupAllowed()
   @Post("totp/enroll/options")
   async totpEnrollOptions(@CurrentUser() user: AuthenticatedUser) {
     return this.auth.totpEnrollOptions(user.id, user.email);
   }
 
+  @MfaSetupAllowed()
   @Post("totp/enroll/verify")
   async totpEnrollVerify(@CurrentUser() user: AuthenticatedUser, @Body(new ZodValidationPipe(TotpEnrollVerifySchema)) body: TotpEnrollVerifyDto) {
     return this.auth.totpEnrollVerify(user.id, body.code);
@@ -179,6 +185,7 @@ export class AuthController {
     return { accessToken: pair.accessToken };
   }
 
+  @MfaSetupAllowed()
   @Post("logout")
   async logout(@CurrentUser() user: AuthenticatedUser, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const raw = req.cookies?.[REFRESH_COOKIE];
@@ -187,6 +194,7 @@ export class AuthController {
     return { ok: true };
   }
 
+  @MfaSetupAllowed()
   @Post("logout-all")
   async logoutAll(@CurrentUser() user: AuthenticatedUser, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     await this.auth.logoutAllSessions(user.id, this.ctx(req));
@@ -205,6 +213,7 @@ export class AuthController {
     return { ok: true };
   }
 
+  @MfaSetupAllowed()
   @Get("me")
   async me(@CurrentUser() user: AuthenticatedUser) {
     return user;

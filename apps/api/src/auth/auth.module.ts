@@ -11,6 +11,6 @@ import { WebAuthnService } from "./webauthn.service";
   imports: [JwtModule.register({})],
   controllers: [AuthController],
   providers: [AuthService, PasswordService, TotpService, TokenService, WebAuthnService],
-  exports: [AuthService, TokenService],
+  exports: [AuthService, TokenService, PasswordService],
 })
 export class AuthModule {}

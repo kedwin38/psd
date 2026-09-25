@@ -6,8 +6,8 @@ import type { Env } from "../config/env";
 /**
  * Argon2id with a per-user salt (argon2's default) plus an application-wide
  * pepper held outside the database (spec §12). Passwords are always optional
- * and secondary to WebAuthn — AuthService enforces that admin roles can never
- * authenticate with a password alone, regardless of what this service does.
+ * and secondary to WebAuthn — AuthService and JwtAuthGuard enforce that an admin
+ * role is never usable with a password alone, regardless of what this service does.
  */
 @Injectable()
 export class PasswordService {

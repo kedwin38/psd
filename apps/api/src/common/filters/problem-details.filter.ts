@@ -18,6 +18,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
     let title = "Internal Server Error";
     let detail: string | undefined;
     let errors: unknown;
+    let code: string | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -30,6 +31,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
         title = (b.error as string) ?? exception.name;
         detail = Array.isArray(b.message) ? undefined : ((b.message as string) ?? undefined);
         if (Array.isArray(b.message)) errors = b.message;
+        if (typeof b.code === "string") code = b.code;
       }
     } else {
       this.logger.error("Unhandled exception", exception as Error);
@@ -41,6 +43,7 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       status,
       detail,
       ...(errors ? { errors } : {}),
+      ...(code ? { code } : {}),
     });
   }
 }

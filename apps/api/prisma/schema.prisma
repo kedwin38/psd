@@ -60,6 +60,11 @@ model User {
 
   mfaEnrolled  Boolean  @default(false)
 
+  // An admin role was given to an account with no second factor: until it enrolls TOTP, its sessions can do nothing
+  // else. The deadline starts at its first password sign-in (see AuthService.passwordLoginStart).
+  mfaSetupRequired Boolean   @default(false)
+  mfaSetupDeadline DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

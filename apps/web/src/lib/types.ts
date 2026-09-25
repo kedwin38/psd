@@ -6,6 +6,9 @@ export interface AuthenticatedUser {
   roles: RoleName[];
   organizationId: string | null;
   steppedUp: boolean;
+  /** Nothing but TOTP enrollment works for this account until it's done. */
+  mfaSetupRequired: boolean;
+  mfaSetupDeadline: string | null;
 }
 
 export type UserStatus = "ACTIVE" | "SUSPENDED" | "PENDING_VERIFICATION";
@@ -24,6 +27,7 @@ export interface AdminUser {
   displayName: string;
   status: UserStatus;
   mfaEnrolled: boolean;
+  mfaSetupRequired: boolean;
   createdAt: string;
   roles: RoleAssignment[];
 }

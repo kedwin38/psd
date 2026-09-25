@@ -102,7 +102,7 @@ test("a super admin grants a role and suspends an account, which locks that acco
   });
 
   await test.step("and the suspended account can't sign in again", async () => {
-    await targetPage.getByRole("button", { name: "Use password + authenticator code instead" }).click();
+    await targetPage.getByRole("button", { name: "Sign in with a password instead" }).click();
     await targetPage.locator("#email-password").fill(target.email);
     await targetPage.getByLabel("Password").fill(target.password);
     await targetPage.getByRole("button", { name: "Continue" }).click();

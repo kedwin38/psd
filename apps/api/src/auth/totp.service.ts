@@ -74,7 +74,7 @@ export class TotpService {
         recoveryCodesHash: recoveryCodes.map((c) => this.hashRecoveryCode(c)),
       },
     });
-    await this.prisma.user.update({ where: { id: userId }, data: { mfaEnrolled: true } });
+    await this.prisma.user.update({ where: { id: userId }, data: { mfaEnrolled: true, mfaSetupRequired: false, mfaSetupDeadline: null } });
     return { recoveryCodes };
   }
 
