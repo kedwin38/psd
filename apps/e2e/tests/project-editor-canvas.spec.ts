@@ -191,11 +191,10 @@ test("end-user editor: live canvas with in-place editing that matches the export
     await saved(page);
   });
 
-  await test.step("the on-canvas toggle shows a hidden layer; a visible overlay doesn't block clicks beneath it", async () => {
-    await page.getByRole("button", { name: "Show Watermark" }).click();
+  await test.step("the panel's show/hide switch shows a hidden layer; a visible overlay doesn't block clicks beneath it", async () => {
+    await block(page, "Watermark").getByRole("checkbox").check();
     await expect.poll(async () => (await pixelAt(page, 300, 20))[0]).toBeGreaterThan(BLUE_BG[0]! + 20);
     await expect(block(page, "Watermark").getByRole("checkbox")).toBeChecked();
-    await expect(page.getByRole("button", { name: "Hide Watermark" })).toBeVisible();
     await clickScene(page, 70, 280);
     await expect(block(page, "Full Name")).toHaveClass(/selected/);
   });
@@ -213,7 +212,7 @@ test("end-user editor: live canvas with in-place editing that matches the export
     await expect(block(page, "Full Name").locator("textarea")).toHaveValue("Alice Q. Example");
     await expect.poll(() => pixelAt(page, 170, 120)).toEqual(RED);
     await expect.poll(() => Promise.all([regionHash(page, FULL_NAME), regionHash(page, { left: 0, top: 0, right: 600, bottom: 380 })])).toEqual(hashes);
-    await expect(page.getByRole("button", { name: "Hide Watermark" })).toBeVisible();
+    await expect(block(page, "Watermark").getByRole("checkbox")).toBeChecked();
   });
 
   await test.step("scroll/pinch zoom, keys, Space+drag pan and Fit; clicks still land on the right layer when zoomed", async () => {

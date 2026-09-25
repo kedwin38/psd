@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { Link, useParams } from "react-router-dom";
 import { coverCrop, createDomBuffer, rasterAssetId, uploadImageRequests } from "@psd-studio/canvas-renderer";
 import { referencedAssetIds, toFieldOverrides, type CropRect, type SceneGraph, type SceneNode } from "@psd-studio/scene-graph";
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronRight, CloudCheck, Download, Eye, EyeOff, Folder, FolderOpen, ImageIcon, ImageUp, Info, Move, PanelLeft, PenLine, Type, X, XCircle } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronRight, CloudCheck, Download, Eye, Folder, FolderOpen, ImageIcon, ImageUp, Info, Move, PanelLeft, PenLine, Type, X, XCircle } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { isTypingTarget } from "../lib/keyboard";
 import type { ExportJob, Project, TemplateField } from "../lib/types";
@@ -215,7 +215,7 @@ export function ProjectEditorPage() {
     (node: SceneNode) => {
       if (node.type === "group") return true;
       const field = fieldByNode.get(node.id);
-      // Show/hide layers are toggled from their chip; a visible one mustn't swallow clicks meant for what it overlays.
+      // Show/hide layers are toggled from the fields panel, not the canvas; a visible one mustn't swallow clicks meant for what it overlays.
       return !!field && field.fieldType !== "VISIBILITY";
     },
     [fieldByNode],
@@ -350,28 +350,6 @@ export function ProjectEditorPage() {
     const editValue = editingField ? values[editingField.id] : undefined;
     return (
       <>
-        {fields.map((field) => {
-          const node = nodes.get(field.id);
-          if (field.fieldType !== "VISIBILITY" || !node) return null;
-          const shown = isShown(field);
-          return (
-            <button
-              key={field.id}
-              type="button"
-              className={`canvas-visibility-toggle${shown ? "" : " off"}`}
-              style={{ left: Math.max(6, node.bounds.left * view.zoom + view.x + 6), top: Math.max(6, node.bounds.top * view.zoom + view.y + 6) }}
-              aria-pressed={shown}
-              aria-label={`${shown ? "Hide" : "Show"} ${field.label}`}
-              title={`${shown ? "Hide" : "Show"} ${field.label}`}
-              onClick={() => {
-                select(field.id, true);
-                setShown(field, !shown);
-              }}
-            >
-              {shown ? <Eye size={14} aria-hidden="true" /> : <EyeOff size={14} aria-hidden="true" />} {field.label}
-            </button>
-          );
-        })}
         {editing?.mode === "text" && editingField && editNode?.type === "text" && (
           <TextEditOverlay
             key={editingField.id}
@@ -464,10 +442,7 @@ export function ProjectEditorPage() {
         )}
         {field.fieldType === "VISIBILITY" && (
           <label className="switch-row">
-            <span>
-              Show on design
-              <span className="sub">You can also toggle it from its chip on the canvas.</span>
-            </span>
+            <span>Show on design</span>
             <input id={`field-${field.id}`} type="checkbox" className="switch" checked={isShown(field)} onChange={(e) => setShown(field, e.target.checked)} />
           </label>
         )}
