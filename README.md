@@ -222,6 +222,14 @@ drive mouse, wheel, keyboard and Space+drag.)
   their project.
 - An async export pipeline producing PNG/JPEG/real-PDF (via Skia)/TIFF
   with signed, expiring download URLs.
+- A catalog to browse templates like a shop: nested categories (any
+  depth; moving a category under its own subcategory is refused) in an
+  expandable sidebar with counts, breadcrumbs, search and sort, and each
+  card showing its published version rendered by the server compositor
+  (rendered once per version, then served from storage). Admins rename or
+  re-file templates, replace a template's PSD (a new version, live when
+  published) and delete templates and empty categories behind step-up;
+  projects started from a deleted template keep working.
 
 ## Known scope limits (stated up front, not discovered later)
 
@@ -262,8 +270,11 @@ In the spirit of the spec's own "honest scope limits" principle:
   wide the editor's canvas has no room), and the admin workspace's three
   panes get tight below ~1280px wide. Touch pinch/pan works on the canvas
   itself, e.g. on tablets.
-- **The template gallery has no thumbnails** — cards show the category
-  name.
+- **Deleting a template doesn't free its storage.** A template no project
+  uses is removed with its versions and fields, but its PSD, layer rasters
+  and thumbnails stay in object storage (layer rasters can be shared across
+  versions, so they aren't reference-counted yet). A template projects use
+  only leaves the catalog, and its category can't be deleted while it does.
 - **The server-rendered preview endpoints**
   (`GET /templates/:id/versions/:vid/preview`, `POST /projects/:id/preview`)
   still exist but the web app no longer uses them.
