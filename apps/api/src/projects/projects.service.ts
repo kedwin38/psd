@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import sharp from "sharp";
 import { SceneCompositor } from "@psd-studio/psd-engine";
 import type { ImageFieldConstraints, TextFieldConstraints } from "@psd-studio/scene-graph";
@@ -7,12 +7,15 @@ import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { DbBackedAssetSource } from "../rendering/db-asset-source";
 import { loadFieldOverrides } from "../rendering/field-overrides";
-import { AssetOwnerType, TemplateStatus } from "../generated/prisma";
+import { AssetOwnerType, ProjectStatus, TemplateStatus } from "../generated/prisma";
 import { sniffImageMime } from "../common/image-sniff";
-import type { CreateProjectDto, PatchFieldValueDto } from "./dto/project.dto";
+import type { CreateProjectDto, PatchFieldValueDto, RenameProjectDto } from "./dto/project.dto";
 
 const PREVIEW_MAX_DIMENSION = 1000;
 const MAX_UPLOAD_IMAGE_PIXELS = 100_000_000;
+
+/** End users are limited to this many not-yet-exported projects at once (product decision, gallery §"Your projects"). */
+const MAX_PENDING_PROJECTS = 2;
 
 @Injectable()
 export class ProjectsService {
@@ -27,14 +30,25 @@ export class ProjectsService {
     if (!template || template.status !== TemplateStatus.PUBLISHED || !template.currentVersionId) {
       throw new BadRequestException("Template is not published.");
     }
-    const project = await this.prisma.project.create({
-      data: {
-        userId,
-        organizationId,
-        templateId: template.id,
-        templateVersionId: template.currentVersionId,
-        name: dto.name,
-      },
+    const currentVersionId = template.currentVersionId;
+
+    const project = await this.prisma.$transaction(async (tx) => {
+      // Serializes this user's count-then-create against a concurrent one (e.g. a double-submit), so two
+      // near-simultaneous requests can't both read "1 pending" and both create, over-admitting past the cap.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('projects.pending_cap'), hashtext(${userId}))`;
+      const pendingCount = await tx.project.count({ where: { userId, status: ProjectStatus.IN_PROGRESS } });
+      if (pendingCount >= MAX_PENDING_PROJECTS) {
+        throw new ConflictException(`You already have ${MAX_PENDING_PROJECTS} pending projects. Clear one to start another.`);
+      }
+      return tx.project.create({
+        data: {
+          userId,
+          organizationId,
+          templateId: template.id,
+          templateVersionId: currentVersionId,
+          name: dto.name,
+        },
+      });
     });
     await this.audit.record({ actorId: userId, action: "project.created", resourceType: "Project", resourceId: project.id });
     return project;
@@ -149,5 +163,36 @@ export class ProjectsService {
     const compositor = new SceneCompositor(new DbBackedAssetSource(this.prisma, this.storage));
     const result = await compositor.render(sceneGraph, { scale, overrides });
     return { dataUrl: `data:image/png;base64,${result.png.toString("base64")}` };
+  }
+
+  /** Lets an end user tell their pending projects apart in the gallery. */
+  async rename(projectId: string, dto: RenameProjectDto, userId: string) {
+    await this.getOwned(projectId, userId);
+    const project = await this.prisma.project.update({ where: { id: projectId }, data: { name: dto.name } });
+    await this.audit.record({ actorId: userId, action: "project.renamed", resourceType: "Project", resourceId: projectId, metadata: { name: dto.name } });
+    return project;
+  }
+
+  /**
+   * Frees up a pending slot. Deletes the project (its field values and export-job rows cascade in the schema) along
+   * with its uploaded-photo assets, including their real storage bytes — not just the DB rows. A completed export's
+   * output file is deliberately left alone: it's a finished, possibly already-downloaded artifact, not a draft, and
+   * the export-job row that would let anyone re-derive its download link is gone the moment the project is (cascade),
+   * so nothing can serve it going forward either way.
+   */
+  async remove(projectId: string, userId: string): Promise<void> {
+    await this.getOwned(projectId, userId);
+    const uploads = await this.prisma.asset.findMany({ where: { projectId, ownerType: AssetOwnerType.USER_UPLOAD } });
+
+    await this.prisma.$transaction([
+      this.prisma.asset.deleteMany({ where: { id: { in: uploads.map((a) => a.id) } } }),
+      this.prisma.project.delete({ where: { id: projectId } }),
+    ]);
+
+    // Best-effort: the DB rows are already gone (the source of truth for "does this project still exist"), so a
+    // storage hiccup here leaves orphaned bytes rather than an inconsistent, half-deleted project.
+    await Promise.all(uploads.map((asset) => this.storage.deleteByKey(asset.storageKey).catch(() => undefined)));
+
+    await this.audit.record({ actorId: userId, action: "project.deleted", resourceType: "Project", resourceId: projectId });
   }
 }
