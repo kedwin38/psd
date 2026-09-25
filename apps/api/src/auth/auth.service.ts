@@ -15,6 +15,11 @@ export interface RequestContext {
 
 export const ACCOUNT_SUSPENDED = "This account is suspended.";
 
+export const MFA_SETUP_REQUIRED = "MFA_SETUP_REQUIRED";
+export const MFA_SETUP_PENDING = "Set up an authenticator app to finish activating this account.";
+export const MFA_SETUP_OVERDUE = "This account's 15 minutes to set up an authenticator app have passed. Set one up to use it again.";
+export const MFA_SETUP_WINDOW_MS = 15 * 60_000;
+
 export type StepUpMethod = "passkey" | "totp";
 
 export interface TokenPair {
@@ -22,6 +27,8 @@ export interface TokenPair {
   refreshToken: string;
   refreshTokenExpiresAt: Date;
 }
+
+export type PasswordLoginResult = { mfaRequired: true; pendingToken: string } | ({ mfaRequired: false } & TokenPair);
 
 @Injectable()
 export class AuthService {
@@ -45,6 +52,8 @@ export class AuthService {
       roles: [...new Set(user.roles.map((r) => r.role))],
       organizationId: user.organizationId,
       steppedUp: false,
+      mfaSetupRequired: user.mfaSetupRequired,
+      mfaSetupDeadline: user.mfaSetupDeadline,
     };
   }
 
@@ -140,19 +149,18 @@ export class AuthService {
     });
   }
 
-  // --- Password + TOTP (fallback) login ----------------------------------------
-  // Policy: a password login ALWAYS requires a second TOTP factor — there is
-  // no single-step password-only login path for any role (spec §12: no
-  // password-only path, especially not for admins; we hold every role to the
-  // same bar rather than special-casing it).
+  // --- Password (+ TOTP) login ---------------------------------------------------
+  // Policy: an account with TOTP enrolled always has to give a code. Without TOTP, a password alone signs in only an
+  // account holding no admin role, or one an admin provisioned with an admin role — and that one gets a session the
+  // JwtAuthGuard confines to enrolling TOTP. Roles are read fresh at every sign-in, since they change.
 
   async setPassword(userId: string, password: string): Promise<void> {
     const hash = await this.password.hash(password);
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: hash } });
   }
 
-  async passwordLoginStart(email: string, password: string, ctx: RequestContext): Promise<{ pendingToken: string }> {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+  async passwordLoginStart(email: string, password: string, ctx: RequestContext): Promise<PasswordLoginResult> {
+    const user = await this.prisma.user.findUnique({ where: { email }, include: { roles: true } });
     if (!user || !user.passwordHash) throw new UnauthorizedException("Invalid email or password.");
     const ok = await this.password.verify(user.passwordHash, password);
     if (!ok) {
@@ -160,11 +168,19 @@ export class AuthService {
       throw new UnauthorizedException("Invalid email or password.");
     }
     if (user.status === UserStatus.SUSPENDED) throw new ForbiddenException(ACCOUNT_SUSPENDED);
-    const enrolled = await this.totp.isEnrolled(user.id);
-    if (!enrolled) {
+    if (await this.totp.isEnrolled(user.id)) {
+      return { mfaRequired: true, pendingToken: this.tokens.issuePendingMfaToken(user.id) };
+    }
+    if (user.mfaSetupRequired) {
+      if (!user.mfaSetupDeadline) {
+        await this.prisma.user.update({ where: { id: user.id }, data: { mfaSetupDeadline: new Date(Date.now() + MFA_SETUP_WINDOW_MS) } });
+      }
+      return { mfaRequired: false, ...(await this.issueSessionFor(user.id, "auth.login.password.mfa_setup", ctx)) };
+    }
+    if (this.isAdminRole(user.roles.map((r) => r.role))) {
       throw new ForbiddenException("Password login requires TOTP to be enrolled on this account. Enroll TOTP or use a passkey.");
     }
-    return { pendingToken: this.tokens.issuePendingMfaToken(user.id) };
+    return { mfaRequired: false, ...(await this.issueSessionFor(user.id, "auth.login.password", ctx)) };
   }
 
   async passwordLoginVerifyTotp(pendingToken: string, code: string, ctx: RequestContext): Promise<TokenPair> {

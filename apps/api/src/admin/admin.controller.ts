@@ -1,6 +1,15 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
 import { AdminService } from "./admin.service";
-import { AssignRoleSchema, AuditLogQuerySchema, SetUserStatusSchema, type AssignRoleDto, type AuditLogQueryDto, type SetUserStatusDto } from "./dto/admin.dto";
+import {
+  AssignRoleSchema,
+  AuditLogQuerySchema,
+  CreateUserSchema,
+  SetUserStatusSchema,
+  type AssignRoleDto,
+  type AuditLogQueryDto,
+  type CreateUserDto,
+  type SetUserStatusDto,
+} from "./dto/admin.dto";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { Roles } from "../auth/decorators/roles.decorator";
 import { StepUp } from "../auth/decorators/step-up.decorator";
@@ -16,6 +25,13 @@ export class AdminController {
   @Get("users")
   listUsers() {
     return this.admin.listUsers();
+  }
+
+  @Roles(RoleName.SUPER_ADMIN)
+  @StepUp()
+  @Post("users")
+  createUser(@Body(new ZodValidationPipe(CreateUserSchema)) body: CreateUserDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.admin.createUser(body, user.id);
   }
 
   @Roles(RoleName.SUPER_ADMIN)

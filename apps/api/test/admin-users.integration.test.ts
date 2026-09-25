@@ -61,8 +61,8 @@ describe("Admin user management", () => {
     const res = await http().get("/api/v1/admin/users").set("Authorization", `Bearer ${adminToken}`);
     expect(res.status).toBe(200);
     const listed = res.body.find((u: { id: string }) => u.id === member.id);
-    expect(Object.keys(listed).sort()).toEqual(["createdAt", "displayName", "email", "id", "mfaEnrolled", "roles", "status"]);
-    expect(listed).toMatchObject({ email: member.email, displayName: "Member", status: "ACTIVE", mfaEnrolled: true, roles: [{ role: "END_USER" }] });
+    expect(Object.keys(listed).sort()).toEqual(["createdAt", "displayName", "email", "id", "mfaEnrolled", "mfaSetupRequired", "roles", "status"]);
+    expect(listed).toMatchObject({ email: member.email, displayName: "Member", status: "ACTIVE", mfaEnrolled: true, mfaSetupRequired: false, roles: [{ role: "END_USER" }] });
     expect(JSON.stringify(res.body)).not.toContain("passwordHash");
     expect(JSON.stringify(res.body)).not.toContain("$argon2");
   });

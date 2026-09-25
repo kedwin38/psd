@@ -7,6 +7,9 @@ export interface AuthenticatedUser {
   organizationId: string | null;
   /** Present when the caller supplied a valid, fresh step-up token on this request. */
   steppedUp: boolean;
+  /** Until TOTP is enrolled, only the routes marked @MfaSetupAllowed() answer this account. */
+  mfaSetupRequired: boolean;
+  mfaSetupDeadline: Date | null;
 }
 
 export interface AccessTokenClaims {
