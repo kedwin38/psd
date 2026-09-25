@@ -165,7 +165,7 @@ export function GalleryPage() {
   const startProject = async (template: Template) => {
     if (creatingFor) return;
     if (atPendingCap) {
-      setError(`You already have ${MAX_PENDING_PROJECTS} pending projects. Clear one below to start another.`);
+      setError(`You already have ${MAX_PENDING_PROJECTS} pending projects. Clear one to start another.`);
       return;
     }
     setCreatingFor(template.id);
@@ -327,7 +327,6 @@ export function GalleryPage() {
                 role="button"
                 tabIndex={0}
                 aria-busy={creatingFor === t.id}
-                aria-disabled={atPendingCap}
                 title={atPendingCap ? `You already have ${MAX_PENDING_PROJECTS} pending projects. Clear one to start another.` : undefined}
                 onClick={() => startProject(t)}
                 onKeyDown={(e) => {
