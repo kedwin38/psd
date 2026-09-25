@@ -12,6 +12,15 @@ export function categoryTree(categories: Category[]): CategoryNode[] {
   return roots;
 }
 
+export function findCategoryNode(nodes: CategoryNode[], id: string): CategoryNode | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findCategoryNode(node.children, id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** Depth-first, so each category directly follows its parent. */
 export function flattenTree(nodes: CategoryNode[], depth = 0): { category: CategoryNode; depth: number }[] {
   return nodes.flatMap((category) => [{ category, depth }, ...flattenTree(category.children, depth + 1)]);

@@ -3,8 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { Rocket } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import type { Category, Template, TemplateVersion } from "../lib/types";
+import { categoryLabel, categoryTree, flattenTree } from "../lib/categories";
 import { Spinner } from "../components/workspace";
 import { useStepUp } from "../components/StepUpDialog";
+import { TemplateThumbnail } from "../components/TemplateThumbnail";
 
 const INGEST_POLL_MS = 2000;
 
@@ -13,6 +15,19 @@ interface AdminTemplate extends Template {
 }
 
 const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ? (err.detail ?? err.title) : fallback);
+
+function CategorySelect({ id, categories, value, onChange }: { id: string; categories: Category[]; value: string; onChange: (categoryId: string) => void }) {
+  return (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)} required>
+      <option value="">Select a category…</option>
+      {flattenTree(categoryTree(categories)).map(({ category }) => (
+        <option key={category.id} value={category.id}>
+          {categoryLabel(categories, category.id)}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function UploadProgress({ fraction }: { fraction: number }) {
   const percent = Math.round(fraction * 100);
@@ -33,6 +48,7 @@ export function TemplatesAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [publishing, setPublishing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ id: string; name: string; categoryId: string } | null>(null);
   // Where the progress shows: "new" for the new-template form, else the id of the template getting a new version.
   const [uploading, setUploading] = useState<{ target: string; fraction: number } | null>(null);
   const psdInput = useRef<HTMLInputElement>(null);
@@ -120,22 +136,82 @@ export function TemplatesAdminPage() {
     }
   };
 
+  const saveDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    const { id, ...details } = editing;
+    setError(null);
+    setBusy(true);
+    try {
+      await api.patch(`/templates/${id}`, details);
+      setEditing(null);
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Could not save the template."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (template: AdminTemplate) => {
+    if (!confirm(`Delete “${template.name}”? It leaves the catalog at once. Projects end users already started from it keep working.`)) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
+      await api.del(`/templates/${template.id}`, stepUpToken);
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Could not delete the template."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="grid-2">
       {stepUpDialog}
       <div>
         <h1>Template library</h1>
-        <p className="subtitle">Upload a PSD and publish it: every unlocked layer becomes an editable field. Lock layers in the workspace to keep them fixed.</p>
+        <p className="subtitle">
+          Upload a PSD and publish it: every unlocked layer becomes an editable field. Lock layers in the workspace to keep them fixed. Replace PSD adds a new
+          version to publish when it's ready: end users keep the current one until then, and projects already started stay on theirs.
+        </p>
         {error && <div className="error-box">{error}</div>}
         <div className="stack">
           {templates.map((t) => (
             <div className="card" key={t.id}>
-              <div className="row between">
-                <div>
-                  <h3>
-                    {t.name} <span className={`badge ${t.status}`}>{t.status}</span>
-                  </h3>
-                  <p className="hint">{categories.find((c) => c.id === t.categoryId)?.name ?? "Uncategorized"}</p>
+              <div className="row between admin-template-head">
+                <div className="row">
+                  <TemplateThumbnail template={t} className="small" />
+                  {editing?.id === t.id ? (
+                    <form onSubmit={saveDetails} className="template-details-form">
+                      <div>
+                        <label htmlFor="template-rename">Template name</label>
+                        <input id="template-rename" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required autoFocus />
+                      </div>
+                      <div>
+                        <label htmlFor="template-move">Category</label>
+                        <CategorySelect id="template-move" categories={categories} value={editing.categoryId} onChange={(categoryId) => setEditing({ ...editing, categoryId })} />
+                      </div>
+                      <div className="row">
+                        <button type="submit" className="primary sm" disabled={busy}>
+                          Save
+                        </button>
+                        <button type="button" className="sm" onClick={() => setEditing(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div>
+                      <h3>
+                        {t.name} <span className={`badge ${t.status}`}>{t.status}</span>
+                      </h3>
+                      <p className="hint">{categoryLabel(categories, t.categoryId) || "Uncategorized"}</p>
+                    </div>
+                  )}
                 </div>
                 <div className="row">
                   {uploading?.target === t.id && <UploadProgress fraction={uploading.fraction} />}
@@ -149,8 +225,20 @@ export function TemplatesAdminPage() {
                     style={{ display: "none" }}
                     id={`upload-${t.id}`}
                   />
-                  <button disabled={busy} onClick={() => document.getElementById(`upload-${t.id}`)?.click()}>
-                    Upload new PSD version
+                  <button
+                    disabled={busy}
+                    onClick={() => document.getElementById(`upload-${t.id}`)?.click()}
+                    title="Upload a new PSD for this template. End users get it once you publish it."
+                  >
+                    Replace PSD…
+                  </button>
+                  {editing?.id !== t.id && (
+                    <button disabled={busy} onClick={() => setEditing({ id: t.id, name: t.name, categoryId: t.categoryId })}>
+                      Edit
+                    </button>
+                  )}
+                  <button className="danger" disabled={busy} onClick={() => remove(t)}>
+                    Delete
                   </button>
                 </div>
               </div>
@@ -221,14 +309,7 @@ export function TemplatesAdminPage() {
           </div>
           <div>
             <label htmlFor="template-category">Category</label>
-            <select id="template-category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} required>
-              <option value="">Select a category…</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <CategorySelect id="template-category" categories={categories} value={categoryId} onChange={setCategoryId} />
           </div>
           <button type="submit" className="primary" disabled={busy || categories.length === 0}>
             Create template
