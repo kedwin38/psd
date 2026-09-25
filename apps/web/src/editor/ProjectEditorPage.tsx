@@ -9,6 +9,7 @@ import type { ExportJob, Project, TemplateField } from "../lib/types";
 import { SceneCanvas, handleZoomKey, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
 import { findNode } from "../canvas/sceneTree";
 import { MAX_DECODE_DIMENSION, useLayerImages } from "../canvas/useLayerImages";
+import { useWatermark } from "../canvas/useWatermark";
 import { BitmapThumb } from "../canvas/BitmapThumb";
 import type { View } from "../canvas/viewport";
 import { EmptyState, MOD, PanelResizer, Popover, ShortcutsButton, Spinner, WorkspaceSkeleton, WorkspaceTopBar, usePanel, type Shortcut } from "../components/workspace";
@@ -73,6 +74,7 @@ export function ProjectEditorPage() {
   const fileInputs = useRef(new Map<string, HTMLInputElement>());
   const measure = useMemo(() => createDomBuffer(1, 1), []);
   const panel = usePanel("editor-fields", 360, 316);
+  const watermark = useWatermark();
 
   useEffect(() => {
     if (!projectId) return;
@@ -578,6 +580,7 @@ export function ProjectEditorPage() {
             imageDrop={imageDrop}
             renderOverlay={renderOverlay}
             artboardLabel={project.name}
+            watermark={watermark}
           />
         </main>
       </div>

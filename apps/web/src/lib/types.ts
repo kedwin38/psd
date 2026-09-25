@@ -87,6 +87,11 @@ export interface Project {
   fieldValues?: { templateFieldId: string; value: unknown }[];
 }
 
+export interface WatermarkConfig {
+  url: string;
+  opacity: number;
+}
+
 export interface ExportJob {
   id: string;
   status: "QUEUED" | "RENDERING" | "COMPLETE" | "FAILED";

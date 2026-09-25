@@ -8,6 +8,7 @@ import type { FieldType, Template, TemplateField, TemplateVersion } from "../lib
 import { SceneCanvas, handleZoomKey, type ImageDrop, type SceneCanvasHandle } from "../canvas/SceneCanvas";
 import { ancestorIds, findNode, withNodeUpdate } from "../canvas/sceneTree";
 import { useLayerImages } from "../canvas/useLayerImages";
+import { useWatermark } from "../canvas/useWatermark";
 import { EmptyState, MOD, PanelResizer, Popover, ShortcutsButton, Spinner, WorkspaceSkeleton, WorkspaceTopBar, usePanel, type Shortcut } from "../components/workspace";
 import { LayerTree, TYPE_LABEL } from "./LayerTree";
 import { FIELD_TYPE_LABEL, FieldMappingForm } from "./FieldMappingForm";
@@ -70,6 +71,7 @@ export function TemplateWorkspacePage() {
   });
   const leftPanel = usePanel("admin-layers", 272, 236);
   const rightPanel = usePanel("admin-inspector", 320, 280);
+  const watermark = useWatermark();
 
   const showFields = (next: TemplateField[]) => {
     fieldsRef.current = next;
@@ -510,6 +512,7 @@ export function TemplateWorkspacePage() {
               loading={layersLoading}
               imageDrop={imageDrop}
               artboardLabel={template.name}
+              watermark={watermark}
             />
           )}
         </main>
