@@ -8,6 +8,50 @@ import { TemplateThumbnail } from "../components/TemplateThumbnail";
 
 type Sort = "newest" | "name";
 
+/** Must match MAX_PENDING_PROJECTS in apps/api/src/projects/projects.service.ts. */
+const MAX_PENDING_PROJECTS = 2;
+
+const errorText = (err: unknown, fallback: string) => (err instanceof ApiError ? (err.detail ?? err.title) : fallback);
+
+function ProjectNameCell({ project, busy, onRename }: { project: Project; busy: boolean; onRename: (name: string) => Promise<boolean> }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(project.name);
+
+  if (!editing) {
+    return (
+      <button type="button" className="link project-name" onClick={() => { setDraft(project.name); setEditing(true); }} aria-label={`Rename ${project.name}`}>
+        {project.name}
+      </button>
+    );
+  }
+
+  const commit = async () => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== project.name) await onRename(trimmed);
+    setEditing(false);
+  };
+
+  return (
+    <input
+      autoFocus
+      value={draft}
+      disabled={busy}
+      aria-label="Project name"
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void commit();
+        } else if (e.key === "Escape") {
+          setDraft(project.name);
+          setEditing(false);
+        }
+      }}
+    />
+  );
+}
+
 const categoryHref = (id: string | null) => (id ? `/?category=${id}` : "/");
 
 function CategoryTreeList({
@@ -58,6 +102,7 @@ export function GalleryPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [myProjects, setMyProjects] = useState<Project[]>([]);
   const [creatingFor, setCreatingFor] = useState<string | null>(null);
+  const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("newest");
@@ -65,11 +110,16 @@ export function GalleryPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
 
+  const loadProjects = () => api.get<Project[]>("/projects").then(setMyProjects);
+
   useEffect(() => {
     api.get<Template[]>("/templates").then(setTemplates);
     api.get<Category[]>("/categories").then(setCategories);
-    api.get<Project[]>("/projects").then(setMyProjects);
+    loadProjects();
   }, []);
+
+  const pendingCount = myProjects.filter((p) => p.status === "IN_PROGRESS").length;
+  const atPendingCap = pendingCount >= MAX_PENDING_PROJECTS;
 
   const selected = categories.find((c) => c.id === params.get("category")) ?? null;
   const path = categoryPath(categories, selected?.id ?? null);
@@ -114,15 +164,48 @@ export function GalleryPage() {
 
   const startProject = async (template: Template) => {
     if (creatingFor) return;
+    if (atPendingCap) {
+      setError(`You already have ${MAX_PENDING_PROJECTS} pending projects. Clear one below to start another.`);
+      return;
+    }
     setCreatingFor(template.id);
     setError(null);
     try {
       const project = await api.post<Project>("/projects", { templateId: template.id, name: `${template.name} project` });
       navigate(`/projects/${project.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? (err.detail ?? err.title) : "Could not start a project from this template.");
+      setError(errorText(err, "Could not start a project from this template."));
     } finally {
       setCreatingFor(null);
+    }
+  };
+
+  const renameProject = async (project: Project, name: string) => {
+    setBusyProjectId(project.id);
+    setError(null);
+    try {
+      await api.patch(`/projects/${project.id}`, { name });
+      await loadProjects();
+      return true;
+    } catch (err) {
+      setError(errorText(err, "Could not rename project."));
+      return false;
+    } finally {
+      setBusyProjectId(null);
+    }
+  };
+
+  const deleteProject = async (project: Project) => {
+    if (!confirm(`Clear “${project.name}”? This permanently deletes the project and its uploaded photos. This can't be undone.`)) return;
+    setBusyProjectId(project.id);
+    setError(null);
+    try {
+      await api.del(`/projects/${project.id}`);
+      await loadProjects();
+    } catch (err) {
+      setError(errorText(err, "Could not delete project."));
+    } finally {
+      setBusyProjectId(null);
     }
   };
 
@@ -130,7 +213,12 @@ export function GalleryPage() {
     <div className="stack gallery">
       {myProjects.length > 0 && (
         <div>
-          <h2>Your projects</h2>
+          <div className="row between">
+            <h2>Your projects</h2>
+            <span className={`badge plain ${atPendingCap ? "pending-cap-reached" : ""}`}>
+              {pendingCount}/{MAX_PENDING_PROJECTS} pending{atPendingCap ? " — clear one to start another" : ""}
+            </span>
+          </div>
           <table>
             <thead>
               <tr>
@@ -142,14 +230,21 @@ export function GalleryPage() {
             <tbody>
               {myProjects.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.name}</td>
+                  <td>
+                    <ProjectNameCell project={p} busy={busyProjectId === p.id} onRename={(name) => renameProject(p, name)} />
+                  </td>
                   <td>
                     <span className={`badge ${p.status}`}>{p.status}</span>
                   </td>
                   <td>
-                    <button className="link" onClick={() => navigate(`/projects/${p.id}`)}>
-                      Open →
-                    </button>
+                    <div className="row end">
+                      <button className="link" onClick={() => navigate(`/projects/${p.id}`)} disabled={busyProjectId === p.id}>
+                        Open →
+                      </button>
+                      <button className="link danger" onClick={() => deleteProject(p)} disabled={busyProjectId === p.id} aria-label={`Clear ${p.name}`}>
+                        Clear
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -227,11 +322,13 @@ export function GalleryPage() {
               ))}
             {shown.map((t) => (
               <div
-                className="template-card"
+                className={`template-card ${atPendingCap ? "at-cap" : ""}`}
                 key={t.id}
                 role="button"
                 tabIndex={0}
                 aria-busy={creatingFor === t.id}
+                aria-disabled={atPendingCap}
+                title={atPendingCap ? `You already have ${MAX_PENDING_PROJECTS} pending projects. Clear one to start another.` : undefined}
                 onClick={() => startProject(t)}
                 onKeyDown={(e) => {
                   if (e.key !== "Enter" && e.key !== " ") return;

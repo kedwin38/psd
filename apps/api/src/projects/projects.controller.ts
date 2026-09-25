@@ -1,8 +1,8 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Put, Res, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put, Res, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
 import { ProjectsService } from "./projects.service";
-import { CreateProjectSchema, PatchFieldValueSchema, type CreateProjectDto, type PatchFieldValueDto } from "./dto/project.dto";
+import { CreateProjectSchema, PatchFieldValueSchema, RenameProjectSchema, type CreateProjectDto, type PatchFieldValueDto, type RenameProjectDto } from "./dto/project.dto";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import type { AuthenticatedUser } from "../auth/auth.types";
@@ -26,6 +26,17 @@ export class ProjectsController {
   @Get(":id")
   get(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.projects.get(id, user.id);
+  }
+
+  @Patch(":id")
+  rename(@Param("id") id: string, @Body(new ZodValidationPipe(RenameProjectSchema)) body: RenameProjectDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.projects.rename(id, body, user.id);
+  }
+
+  @Delete(":id")
+  async remove(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
+    await this.projects.remove(id, user.id);
+    return { ok: true };
   }
 
   @Post(":id/uploads")

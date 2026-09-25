@@ -367,6 +367,7 @@ button.icon-btn.sm { width: 26px; height: 26px; }
 .badge.DRAFT, .badge.PENDING, .badge.QUEUED, .badge.IN_PROGRESS, .badge.ARCHIVED, .badge.PENDING_VERIFICATION { background: var(--gray-100); color: var(--gray-600); }
 .badge.PARSING, .badge.RENDERING { background: var(--accent-50); color: var(--accent-600); }
 .badge.FAILED, .badge.SUSPENDED { background: var(--danger-50); color: var(--danger-700); }
+.badge.pending-cap-reached { background: var(--danger-50); color: var(--danger-700); }
 
 /* ---------- Cards and tables (console pages) ---------- */
 .card {
@@ -492,6 +493,8 @@ tbody tr:hover td { background: var(--gray-25); }
 .template-card .thumb svg { color: var(--accent-400); }
 .template-card:focus-visible { border-color: var(--accent-400); }
 .template-card.loading { cursor: default; pointer-events: none; }
+.template-card.at-cap { opacity: 0.55; }
+.template-card.at-cap:hover { transform: none; box-shadow: var(--shadow-xs); border-color: var(--border); }
 .template-card .body h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .template-card .body .hint { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
