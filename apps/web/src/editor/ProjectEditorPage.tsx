@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { coverCrop, createDomBuffer, rasterAssetId, uploadImageRequests } from "@psd-studio/canvas-renderer";
 import { referencedAssetIds, toFieldOverrides, type CropRect, type SceneGraph, type SceneNode } from "@psd-studio/scene-graph";
-import { AlertCircle, AlertTriangle, CheckCircle2, CloudCheck, Download, Eye, EyeOff, ImageIcon, ImageUp, Info, Move, PanelLeft, PenLine, Type, X, XCircle } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronRight, CloudCheck, Download, Eye, EyeOff, Folder, FolderOpen, ImageIcon, ImageUp, Info, Move, PanelLeft, PenLine, Type, X, XCircle } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { isTypingTarget } from "../lib/keyboard";
 import type { ExportJob, Project, TemplateField } from "../lib/types";
@@ -14,6 +14,7 @@ import type { View } from "../canvas/viewport";
 import { EmptyState, MOD, PanelResizer, Popover, ShortcutsButton, Spinner, WorkspaceSkeleton, WorkspaceTopBar, usePanel, type Shortcut } from "../components/workspace";
 import { CropOverlay } from "./CropOverlay";
 import { TextEditOverlay } from "./TextEditOverlay";
+import { buildFieldTree, type FieldEntry, type FieldGroupEntry } from "./fieldTree";
 import { FIELD_KIND, authoredText, checkImageFile, checkText, exportNotes, imageRules, isImageField, mimeList, textRules, upscaleFactor, type FieldValue } from "./fields";
 import { useFieldValues } from "./useFieldValues";
 
@@ -64,8 +65,11 @@ export function ProjectEditorPage() {
   const [exporting, setExporting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const canvasRef = useRef<SceneCanvasHandle>(null);
   const blockRefs = useRef(new Map<string, HTMLDivElement>());
+  /** A field to scroll to once the groups just expanded to show it have rendered. */
+  const pendingReveal = useRef<string | null>(null);
   const fileInputs = useRef(new Map<string, HTMLInputElement>());
   const measure = useMemo(() => createDomBuffer(1, 1), []);
   const panel = usePanel("editor-fields", 360, 316);
@@ -87,6 +91,8 @@ export function ProjectEditorPage() {
   const nodes = useMemo(() => new Map(fields.flatMap((f) => (graph ? [[f.id, findNode(graph.root, f.nodeId)] as const] : []))), [fields, graph]);
   const fieldByNode = useMemo(() => new Map(fields.map((f) => [f.nodeId, f])), [fields]);
   const selectedField = fields.find((f) => f.id === selectedId);
+  const tree = useMemo(() => buildFieldTree(graph?.root ?? [], fields), [graph, fields]);
+  const selectedGroups = (selectedId && tree.groupsOf.get(selectedId)) || [];
 
   // The same merge the server's preview/export uses, so the canvas paints exactly what will be exported.
   const overrides = useMemo(() => toFieldOverrides(fields.flatMap((f) => (values[f.id] ? [{ nodeId: f.nodeId, value: values[f.id] }] : []))), [fields, values]);
@@ -106,13 +112,39 @@ export function ProjectEditorPage() {
   );
   const layerImages = useLayerImages(`project:${projectId}`, graph, fetchAsset, uploads);
 
-  const select = (fieldId: string | null, reveal = false) => {
-    setSelectedId(fieldId);
-    const block = fieldId ? blockRefs.current.get(fieldId) : undefined;
-    if (!block || !reveal) return;
+  const revealBlock = (fieldId: string) => {
+    const block = blockRefs.current.get(fieldId);
+    if (!block) return;
     block.scrollIntoView({ block: "nearest", behavior: "smooth" });
     block.focus({ preventScroll: true });
   };
+
+  // A selected field's card is never left inside a collapsed group.
+  const select = (fieldId: string | null, reveal = false) => {
+    setSelectedId(fieldId);
+    if (!fieldId) return;
+    const closed = (tree.groupsOf.get(fieldId) ?? []).filter((id) => collapsed.has(id));
+    if (closed.length === 0) {
+      if (reveal) revealBlock(fieldId);
+      return;
+    }
+    setCollapsed((prev) => new Set([...prev].filter((id) => !closed.includes(id))));
+    if (reveal) pendingReveal.current = fieldId;
+  };
+
+  useEffect(() => {
+    const fieldId = pendingReveal.current;
+    if (!fieldId) return;
+    pendingReveal.current = null;
+    revealBlock(fieldId);
+  });
+
+  const toggleGroup = (groupId: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(groupId)) next.add(groupId);
+      return next;
+    });
 
   const currentText = (field: TemplateField) => {
     const value = values[field.id];
@@ -385,6 +417,86 @@ export function ProjectEditorPage() {
     return { message: saveState === "saving" ? "Saving…" : "Saved", tone: "ok" };
   }
 
+  const renderField = (field: TemplateField) => {
+    const node = nodes.get(field.id);
+    const value = values[field.id];
+    const notes = node ? exportNotes(measure, graph, node, value) : [];
+    const problem = uploadErrors[field.id] ?? saveErrors[field.id];
+    const Icon = field.fieldType === "TEXT" ? Type : isImageField(field) ? ImageIcon : Eye;
+    return (
+      <div
+        key={field.id}
+        ref={(el) => {
+          if (el) blockRefs.current.set(field.id, el);
+          else blockRefs.current.delete(field.id);
+        }}
+        className={`field-block${field.id === selectedId ? " selected" : ""}${dropTarget === field.id ? " drop-target" : ""}`}
+        tabIndex={-1}
+        role="group"
+        aria-label={field.label}
+        onFocus={() => setSelectedId(field.id)}
+        {...cardDrop(field)}
+      >
+        <div className="field-head">
+          <span className="f-icon">
+            <Icon size={14} aria-hidden="true" />
+          </span>
+          {isImageField(field) ? <span className="field-title">{field.label}</span> : <label htmlFor={`field-${field.id}`}>{field.label}</label>}
+          <span className="field-kind">{FIELD_KIND[field.fieldType]}</span>
+        </div>
+        {field.fieldType === "TEXT" && <TextFieldControls field={field} text={currentText(field)} check={textCheck(field)} onChange={(text) => editText(field, text)} onEditOnCanvas={() => activate(field)} />}
+        {isImageField(field) && node && (
+          <PhotoField
+            field={field}
+            node={node}
+            value={value?.type === "image" ? value : undefined}
+            name={fileNames[field.id]}
+            images={layerImages.store}
+            uploading={uploading.has(field.id)}
+            inputRef={(el) => {
+              if (el) fileInputs.current.set(field.id, el);
+              else fileInputs.current.delete(field.id);
+            }}
+            onFile={(file) => void replaceImage(field, file)}
+            onChoose={() => chooseFile(field)}
+            onReposition={() => activate(field)}
+          />
+        )}
+        {field.fieldType === "VISIBILITY" && (
+          <label className="switch-row">
+            <span>
+              Show on design
+              <span className="sub">You can also toggle it from its chip on the canvas.</span>
+            </span>
+            <input id={`field-${field.id}`} type="checkbox" className="switch" checked={isShown(field)} onChange={(e) => setShown(field, e.target.checked)} />
+          </label>
+        )}
+        {problem && (
+          <p className="field-error">
+            <XCircle size={14} aria-hidden="true" />
+            <span>{problem}</span>
+          </p>
+        )}
+        {notes.map((note) => (
+          <p key={note} className="export-note">
+            {note}
+          </p>
+        ))}
+      </div>
+    );
+  };
+
+  const renderEntries = (entries: readonly FieldEntry[]): ReactNode =>
+    entries.map((entry) =>
+      entry.kind === "field" ? (
+        renderField(entry.field)
+      ) : (
+        <FieldGroup key={entry.node.id} group={entry} open={!collapsed.has(entry.node.id)} holdsSelection={selectedGroups.includes(entry.node.id)} onToggle={() => toggleGroup(entry.node.id)}>
+          {renderEntries(entry.entries)}
+        </FieldGroup>
+      ),
+    );
+
   const saveTone = invalid ? "error" : saveState;
   const bodyStyle = { "--left-w": `${panel.collapsed ? 0 : panel.width}px` } as CSSProperties;
 
@@ -440,74 +552,7 @@ export function ProjectEditorPage() {
               </h2>
             </div>
             <div className="panel-body">
-              {fields.map((field) => {
-                const node = nodes.get(field.id);
-                const value = values[field.id];
-                const notes = node ? exportNotes(measure, graph, node, value) : [];
-                const problem = uploadErrors[field.id] ?? saveErrors[field.id];
-                const Icon = field.fieldType === "TEXT" ? Type : isImageField(field) ? ImageIcon : Eye;
-                return (
-                  <div
-                    key={field.id}
-                    ref={(el) => {
-                      if (el) blockRefs.current.set(field.id, el);
-                      else blockRefs.current.delete(field.id);
-                    }}
-                    className={`field-block${field.id === selectedId ? " selected" : ""}${dropTarget === field.id ? " drop-target" : ""}`}
-                    tabIndex={-1}
-                    role="group"
-                    aria-label={field.label}
-                    onFocus={() => setSelectedId(field.id)}
-                    {...cardDrop(field)}
-                  >
-                    <div className="field-head">
-                      <span className="f-icon">
-                        <Icon size={14} aria-hidden="true" />
-                      </span>
-                      {isImageField(field) ? <span className="field-title">{field.label}</span> : <label htmlFor={`field-${field.id}`}>{field.label}</label>}
-                      <span className="field-kind">{FIELD_KIND[field.fieldType]}</span>
-                    </div>
-                    {field.fieldType === "TEXT" && <TextFieldControls field={field} text={currentText(field)} check={textCheck(field)} onChange={(text) => editText(field, text)} onEditOnCanvas={() => activate(field)} />}
-                    {isImageField(field) && node && (
-                      <PhotoField
-                        field={field}
-                        node={node}
-                        value={value?.type === "image" ? value : undefined}
-                        name={fileNames[field.id]}
-                        images={layerImages.store}
-                        uploading={uploading.has(field.id)}
-                        inputRef={(el) => {
-                          if (el) fileInputs.current.set(field.id, el);
-                          else fileInputs.current.delete(field.id);
-                        }}
-                        onFile={(file) => void replaceImage(field, file)}
-                        onChoose={() => chooseFile(field)}
-                        onReposition={() => activate(field)}
-                      />
-                    )}
-                    {field.fieldType === "VISIBILITY" && (
-                      <label className="switch-row">
-                        <span>
-                          Show on design
-                          <span className="sub">You can also toggle it from its chip on the canvas.</span>
-                        </span>
-                        <input id={`field-${field.id}`} type="checkbox" className="switch" checked={isShown(field)} onChange={(e) => setShown(field, e.target.checked)} />
-                      </label>
-                    )}
-                    {problem && (
-                      <p className="field-error">
-                        <XCircle size={14} aria-hidden="true" />
-                        <span>{problem}</span>
-                      </p>
-                    )}
-                    {notes.map((note) => (
-                      <p key={note} className="export-note">
-                        {note}
-                      </p>
-                    ))}
-                  </div>
-                );
-              })}
+              {renderEntries(tree.entries)}
               {fields.length === 0 && (
                 <EmptyState icon={<Info size={20} />} title="Nothing to customize">
                   This template has no editable fields. You can still export it as-is.
@@ -595,6 +640,27 @@ function ExportStatus({ job, format, onClose }: { job: ExportJob | null; format:
           Download
         </a>
       )}
+    </div>
+  );
+}
+
+/** A PSD group's fields, indented under a header that collapses them; the header lights up while a field inside is selected. */
+function FieldGroup({ group, open, holdsSelection, onToggle, children }: { group: FieldGroupEntry; open: boolean; holdsSelection: boolean; onToggle: () => void; children: ReactNode }) {
+  const bodyId = `field-group-${group.node.id}`;
+  const count = `${group.count} ${group.count === 1 ? "field" : "fields"}`;
+  return (
+    <div className={`field-group${holdsSelection ? " holds-selection" : ""}`}>
+      <button type="button" className="ghost field-group-head" aria-expanded={open} aria-controls={bodyId} aria-label={`${group.node.name}, ${count}`} title={`${open ? "Collapse" : "Expand"} ${group.node.name}`} onClick={onToggle}>
+        <ChevronRight className="field-group-caret" size={14} aria-hidden="true" />
+        {open ? <FolderOpen size={15} aria-hidden="true" /> : <Folder size={15} aria-hidden="true" />}
+        <span className="field-group-name">{group.node.name}</span>
+        <span className="field-group-count" aria-hidden="true">
+          {group.count}
+        </span>
+      </button>
+      <div id={bodyId} className="field-group-body" hidden={!open}>
+        {children}
+      </div>
     </div>
   );
 }
