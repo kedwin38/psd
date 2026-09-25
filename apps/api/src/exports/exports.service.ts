@@ -29,28 +29,50 @@ export class ExportsService {
     if (!project) throw new NotFoundException("Project not found.");
     if (project.userId !== userId) throw new ForbiddenException("You do not own this project.");
 
-    const version = await this.prisma.templateVersion.findUniqueOrThrow({ where: { id: project.templateVersionId } });
-    const nativeDpi = version.nativeDpi ?? 72;
-    const outputDpi = Math.round(nativeDpi * dto.dpiScale);
+    // Atomic increment-with-guard: only succeeds while downloadsUsed is still under the allowance, so two
+    // concurrent export requests can't both slip through and over-spend the same last slot.
+    const [claimed] = await this.prisma.$queryRaw<{ downloadsUsed: number; downloadsAllowed: number }[]>`
+      UPDATE users SET "downloadsUsed" = "downloadsUsed" + 1
+      WHERE id = ${userId} AND "downloadsUsed" < "downloadsAllowed"
+      RETURNING "downloadsUsed", "downloadsAllowed"
+    `;
+    if (!claimed) {
+      throw new ForbiddenException("You've used all your downloads. Contact an admin to get more.");
+    }
 
-    const job = await this.prisma.exportJob.create({
-      data: {
-        projectId: project.id,
-        requestedById: userId,
-        status: ExportStatus.QUEUED,
-        outputFormat: dto.format,
-        outputDpi,
-      },
-    });
+    try {
+      const version = await this.prisma.templateVersion.findUniqueOrThrow({ where: { id: project.templateVersionId } });
+      const nativeDpi = version.nativeDpi ?? 72;
+      const outputDpi = Math.round(nativeDpi * dto.dpiScale);
 
-    await this.renderQueue.add(
-      "render",
-      { exportJobId: job.id },
-      { attempts: 2, backoff: { type: "exponential", delay: 3000 }, removeOnComplete: 100, removeOnFail: 100 },
-    );
+      const job = await this.prisma.exportJob.create({
+        data: {
+          projectId: project.id,
+          requestedById: userId,
+          status: ExportStatus.QUEUED,
+          outputFormat: dto.format,
+          outputDpi,
+        },
+      });
 
-    await this.audit.record({ actorId: userId, action: "export.requested", resourceType: "ExportJob", resourceId: job.id, metadata: { format: dto.format, outputDpi } });
-    return job;
+      await this.renderQueue.add(
+        "render",
+        { exportJobId: job.id },
+        { attempts: 2, backoff: { type: "exponential", delay: 3000 }, removeOnComplete: 100, removeOnFail: 100 },
+      );
+
+      await this.audit.record({ actorId: userId, action: "export.requested", resourceType: "ExportJob", resourceId: job.id, metadata: { format: dto.format, outputDpi } });
+      return job;
+    } catch (error) {
+      // The download was never actually queued for rendering, so it never cost anything.
+      await this.refundDownload(userId);
+      throw error;
+    }
+  }
+
+  /** Gives a download back, e.g. a job that never made it to the queue, or one that ultimately failed to render. */
+  async refundDownload(userId: string): Promise<void> {
+    await this.prisma.$executeRaw`UPDATE users SET "downloadsUsed" = GREATEST("downloadsUsed" - 1, 0) WHERE id = ${userId}`;
   }
 
   async get(id: string, userId: string) {

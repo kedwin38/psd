@@ -22,6 +22,13 @@ export const SetUserStatusSchema = z.object({
 });
 export type SetUserStatusDto = z.infer<typeof SetUserStatusSchema>;
 
+export const GrantDownloadsSchema = z.object({
+  // How many additional downloads to add to the account's current allowance (not a new total — an admin
+  // granting "+3" always adds 3, regardless of how many the user has already used or been given before).
+  add: z.number().int().min(1).max(1000),
+});
+export type GrantDownloadsDto = z.infer<typeof GrantDownloadsSchema>;
+
 export const AuditLogQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),

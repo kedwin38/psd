@@ -19,6 +19,7 @@ import { ExportsModule } from "./exports/exports.module";
 import { QueueModule } from "./queue/queue.module";
 import { AdminModule } from "./admin/admin.module";
 import { SettingsModule } from "./settings/settings.module";
+import { MessagesModule } from "./messages/messages.module";
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { SettingsModule } from "./settings/settings.module";
     ExportsModule,
     AdminModule,
     SettingsModule,
+    MessagesModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },

@@ -65,6 +65,11 @@ model User {
   mfaSetupRequired Boolean   @default(false)
   mfaSetupDeadline DateTime?
 
+  // Every account starts with a small download allowance (spec: 2 for a new user); an admin can raise it.
+  // Consumed when an export is requested, not when the file is actually fetched — see ExportsService.create.
+  downloadsAllowed Int @default(2)
+  downloadsUsed    Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -76,8 +81,35 @@ model User {
   templatesAuthored  TemplateVersion[] @relation("TemplateVersionCreatedBy")
   auditLogEntries    AuditLogEntry[]
   exportJobsRequested ExportJob[] @relation("ExportJobRequestedBy")
+  messagesInThread    Message[] @relation("MessageThread")
+  messagesAuthored    Message[] @relation("MessageAuthor")
 
   @@map("users")
+}
+
+enum MessageAuthorRole {
+  END_USER
+  ADMIN
+}
+
+// A single flat conversation per end user (spec: admin<->user communication tab). Any admin can read/reply to any
+// thread; the thread is identified by the end user it belongs to, not by which admin is currently answering it.
+model Message {
+  id           String            @id @default(uuid())
+  thread       User              @relation("MessageThread", fields: [threadUserId], references: [id], onDelete: Cascade)
+  threadUserId String
+  author       User              @relation("MessageAuthor", fields: [authorId], references: [id])
+  authorId     String
+  authorRole   MessageAuthorRole
+  body         String?
+  image        Asset?            @relation(fields: [imageAssetId], references: [id])
+  imageAssetId String?           @unique
+  createdAt    DateTime          @default(now())
+  // Set once the OTHER side of the thread has seen it (an admin reading a user's message, or vice versa).
+  readAt       DateTime?
+
+  @@index([threadUserId, createdAt])
+  @@map("messages")
 }
 
 // A user can hold several roles, each optionally scoped to one organization
@@ -281,6 +313,7 @@ enum AssetOwnerType {
   EXPORT_OUTPUT
   TEMPLATE_THUMBNAIL
   WATERMARK
+  MESSAGE_IMAGE
 }
 
 model Asset {
@@ -301,6 +334,7 @@ model Asset {
   thumbnailOf      TemplateVersion?  @relation("TemplateVersionThumbnail")
   exportJobs       ExportJob[] @relation("ExportOutputAsset")
   watermarkOf      AppSettings?      @relation("AppSettingsWatermark")
+  messageOf        Message?
 
   @@index([projectId])
   @@map("assets")

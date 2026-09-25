@@ -49,7 +49,7 @@ export class JwtAuthGuard implements CanActivate {
     }
     const account = await this.prisma.user.findUnique({
       where: { id: claims.sub },
-      select: { status: true, mfaSetupRequired: true, mfaSetupDeadline: true },
+      select: { status: true, mfaSetupRequired: true, mfaSetupDeadline: true, downloadsAllowed: true, downloadsUsed: true },
     });
     if (!account || account.status === UserStatus.SUSPENDED) {
       response.setHeader("WWW-Authenticate", 'Bearer error="invalid_token"');
@@ -68,6 +68,8 @@ export class JwtAuthGuard implements CanActivate {
       steppedUp: false,
       mfaSetupRequired: account.mfaSetupRequired,
       mfaSetupDeadline: account.mfaSetupDeadline,
+      downloadsAllowed: account.downloadsAllowed,
+      downloadsUsed: account.downloadsUsed,
     };
 
     const stepUpHeader = request.headers["x-step-up-token"];

@@ -10,6 +10,8 @@ export interface AuthenticatedUser {
   /** Until TOTP is enrolled, only the routes marked @MfaSetupAllowed() answer this account. */
   mfaSetupRequired: boolean;
   mfaSetupDeadline: Date | null;
+  downloadsAllowed: number;
+  downloadsUsed: number;
 }
 
 export interface AccessTokenClaims {

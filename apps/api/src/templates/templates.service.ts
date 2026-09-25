@@ -116,6 +116,35 @@ export class TemplatesService {
     await this.audit.record({ actorId, action: "template.deleted", resourceType: "Template", resourceId: id, metadata: { name: template.name, projectCount } });
   }
 
+  /**
+   * Removes one earlier version, e.g. a bad upload the admin wants off the list. Never the version currently
+   * live (publish a different one first) and never one any project still points at (they keep the exact
+   * version they were built on, even after the template moves on — same guarantee as template deletion above).
+   */
+  async removeVersion(templateId: string, versionId: string, actorId: string) {
+    const template = await this.get(templateId);
+    const version = await this.getVersion(templateId, versionId);
+    if (template.currentVersionId === versionId) {
+      throw new ConflictException("Cannot delete the current published version. Publish a different version first, or delete the whole template.");
+    }
+    const projectCount = await this.prisma.project.count({ where: { templateVersionId: versionId } });
+    if (projectCount > 0) {
+      throw new ConflictException(`Cannot delete: ${projectCount} project(s) were built on this version and still use it.`);
+    }
+
+    await this.prisma.templateVersion.delete({ where: { id: versionId } });
+
+    const assetIds = [version.psdAssetId, version.thumbnailAssetId].filter((id): id is string => !!id);
+    for (const assetId of assetIds) {
+      const asset = await this.prisma.asset.findUnique({ where: { id: assetId } });
+      if (!asset) continue;
+      await this.storage.deleteByKey(asset.storageKey);
+      await this.prisma.asset.delete({ where: { id: assetId } });
+    }
+
+    await this.audit.record({ actorId, action: "template.version.deleted", resourceType: "TemplateVersion", resourceId: versionId, metadata: { templateId, versionNo: version.versionNo } });
+  }
+
   async uploadVersion(templateId: string, file: { buffer: Buffer; originalname: string; mimetype: string }, actorId: string) {
     await this.get(templateId);
 

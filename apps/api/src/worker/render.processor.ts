@@ -95,6 +95,12 @@ export class RenderProcessorService implements OnModuleInit, OnModuleDestroy {
       const message = error instanceof Error ? error.message : String(error);
       await this.prisma.exportJob.update({ where: { id: exportJobId }, data: { status: ExportStatus.FAILED, error: message } });
       await this.audit.record({ actorId: exportJob.requestedById, action: "export.failed", resourceType: "ExportJob", resourceId: exportJobId, metadata: { error: message } });
+      // Only once retries are exhausted — a job that will still retry hasn't actually failed the user's download
+      // yet. attemptsMade counts completed attempts, not including the one currently failing, hence the +1.
+      const attempts = job.opts.attempts ?? 1;
+      if (job.attemptsMade + 1 >= attempts) {
+        await this.prisma.$executeRaw`UPDATE users SET "downloadsUsed" = GREATEST("downloadsUsed" - 1, 0) WHERE id = ${exportJob.requestedById}`;
+      }
       throw error;
     }
   }

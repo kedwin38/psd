@@ -58,7 +58,7 @@ export async function resetDatabase(): Promise<void> {
     await client.query(`TRUNCATE TABLE
       users, organizations, template_categories, templates, template_versions,
       template_fields, assets, projects, export_jobs, audit_log_entries,
-      refresh_tokens, webauthn_credentials, totp_credentials, user_role_assignments, app_settings
+      refresh_tokens, webauthn_credentials, totp_credentials, user_role_assignments, app_settings, messages
       RESTART IDENTITY CASCADE`);
   } finally {
     await client.end();

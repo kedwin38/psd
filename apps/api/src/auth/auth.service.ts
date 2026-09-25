@@ -54,6 +54,8 @@ export class AuthService {
       steppedUp: false,
       mfaSetupRequired: user.mfaSetupRequired,
       mfaSetupDeadline: user.mfaSetupDeadline,
+      downloadsAllowed: user.downloadsAllowed,
+      downloadsUsed: user.downloadsUsed,
     };
   }
 

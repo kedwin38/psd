@@ -4,7 +4,7 @@ import { AuditService } from "../audit/audit.service";
 import { TokenService } from "../auth/token.service";
 import { PasswordService } from "../auth/password.service";
 import { RoleName, UserStatus, type Prisma } from "../generated/prisma";
-import type { AssignRoleDto, AuditLogQueryDto, CreateUserDto, SetUserStatusDto } from "./dto/admin.dto";
+import type { AssignRoleDto, AuditLogQueryDto, CreateUserDto, GrantDownloadsDto, SetUserStatusDto } from "./dto/admin.dto";
 
 // Credential material (passwordHash, TOTP secrets, passkeys, refresh tokens) never leaves the API.
 const USER_SUMMARY = {
@@ -14,6 +14,8 @@ const USER_SUMMARY = {
   status: true,
   mfaEnrolled: true,
   mfaSetupRequired: true,
+  downloadsAllowed: true,
+  downloadsUsed: true,
   createdAt: true,
   roles: { select: { id: true, role: true, organizationId: true, categoryId: true, createdAt: true }, orderBy: { createdAt: "asc" } },
 } satisfies Prisma.UserSelect;
@@ -94,6 +96,24 @@ export class AdminService {
     const updated = await this.prisma.user.update({ where: { id: userId }, data: { status: dto.status }, select: USER_SUMMARY });
     if (dto.status === UserStatus.SUSPENDED) await this.tokens.revokeAllSessionsForUser(userId);
     await this.audit.record({ actorId, action: "admin.user.status_changed", resourceType: "User", resourceId: userId, metadata: { from: user.status, to: dto.status } });
+    return updated;
+  }
+
+  async grantDownloads(userId: string, dto: GrantDownloadsDto, actorId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException("User not found.");
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { downloadsAllowed: { increment: dto.add } },
+      select: USER_SUMMARY,
+    });
+    await this.audit.record({
+      actorId,
+      action: "admin.user.downloads_granted",
+      resourceType: "User",
+      resourceId: userId,
+      metadata: { added: dto.add, downloadsAllowed: updated.downloadsAllowed },
+    });
     return updated;
   }
 

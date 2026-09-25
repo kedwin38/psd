@@ -80,6 +80,14 @@ export class TemplatesController {
     return this.templates.getVersion(id, versionId);
   }
 
+  @Roles(...ADMIN_ROLES)
+  @StepUp()
+  @Delete(":id/versions/:versionId")
+  async removeVersion(@Param("id") id: string, @Param("versionId") versionId: string, @CurrentUser() user: AuthenticatedUser) {
+    await this.templates.removeVersion(id, versionId, user.id);
+    return { ok: true };
+  }
+
   @Get(":id/versions/:versionId/scene-graph")
   getSceneGraph(@Param("id") id: string, @Param("versionId") versionId: string) {
     return this.templates.getSceneGraph(id, versionId);

@@ -4,10 +4,12 @@ import {
   AssignRoleSchema,
   AuditLogQuerySchema,
   CreateUserSchema,
+  GrantDownloadsSchema,
   SetUserStatusSchema,
   type AssignRoleDto,
   type AuditLogQueryDto,
   type CreateUserDto,
+  type GrantDownloadsDto,
   type SetUserStatusDto,
 } from "./dto/admin.dto";
 import { ZodValidationPipe } from "../common/pipes/zod-validation.pipe";
@@ -46,6 +48,13 @@ export class AdminController {
   @Patch("users/:id/status")
   setUserStatus(@Param("id") id: string, @Body(new ZodValidationPipe(SetUserStatusSchema)) body: SetUserStatusDto, @CurrentUser() user: AuthenticatedUser) {
     return this.admin.setUserStatus(id, body, user.id);
+  }
+
+  @Roles(RoleName.SUPER_ADMIN)
+  @StepUp()
+  @Patch("users/:id/downloads")
+  grantDownloads(@Param("id") id: string, @Body(new ZodValidationPipe(GrantDownloadsSchema)) body: GrantDownloadsDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.admin.grantDownloads(id, body, user.id);
   }
 
   @Roles(RoleName.SUPER_ADMIN)
