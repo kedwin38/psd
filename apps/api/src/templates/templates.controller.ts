@@ -60,6 +60,14 @@ export class TemplatesController {
   }
 
   @Roles(...ADMIN_ROLES)
+  @StepUp()
+  @Delete(":id")
+  async remove(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
+    await this.templates.remove(id, user.id);
+    return { ok: true };
+  }
+
+  @Roles(...ADMIN_ROLES)
   @Post(":id/versions")
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: MAX_PSD_UPLOAD_BYTES } }))
   uploadVersion(@Param("id") id: string, @UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthenticatedUser) {
@@ -116,6 +124,14 @@ export class TemplatesController {
   ) {
     if (!file) throw new BadRequestException('No file uploaded (expected multipart field "file").');
     return this.templates.replaceNodeImage(id, versionId, nodeId, { buffer: file.buffer }, user.id);
+  }
+
+  @Get(":id/versions/:versionId/thumbnail")
+  async thumbnail(@Param("id") id: string, @Param("versionId") versionId: string, @Res() res: Response) {
+    const { bytes, mimeType } = await this.templates.thumbnail(id, versionId);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    res.send(bytes);
   }
 
   @Get(":id/versions/:versionId/preview")

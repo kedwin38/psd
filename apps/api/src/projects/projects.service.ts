@@ -23,7 +23,7 @@ export class ProjectsService {
   ) {}
 
   async create(dto: CreateProjectDto, userId: string, organizationId: string | null) {
-    const template = await this.prisma.template.findUnique({ where: { id: dto.templateId } });
+    const template = await this.prisma.template.findFirst({ where: { id: dto.templateId, deletedAt: null } });
     if (!template || template.status !== TemplateStatus.PUBLISHED || !template.currentVersionId) {
       throw new BadRequestException("Template is not published.");
     }

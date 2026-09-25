@@ -485,6 +485,87 @@ tbody tr:hover td { background: var(--gray-25); }
     linear-gradient(180deg, var(--gray-50), var(--gray-100));
 }
 .template-card .thumb svg { color: var(--accent-400); }
+.template-card:focus-visible { border-color: var(--accent-400); }
+.template-card.loading { cursor: default; pointer-events: none; }
+.template-card .body h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.template-card .body .hint { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Rendered artwork on a neutral stage, contained so the whole design shows (product-photo style) */
+.template-thumb {
+  position: relative; display: grid; place-items: center; aspect-ratio: 4/3; padding: var(--s-4); overflow: hidden;
+  color: var(--accent-400);
+  background:
+    radial-gradient(circle at 30% 20%, rgba(111, 134, 255, 0.1), transparent 55%),
+    linear-gradient(180deg, var(--gray-50), var(--gray-100));
+}
+.template-card .template-thumb img, .template-thumb img {
+  width: 100%; height: 100%; aspect-ratio: auto; object-fit: contain; background: none;
+  filter: drop-shadow(0 1px 1px rgba(16, 20, 28, 0.12)) drop-shadow(0 6px 14px rgba(16, 20, 28, 0.14));
+  transition: transform var(--dur-slow) var(--ease);
+}
+.template-card:hover .template-thumb img { transform: scale(1.025); }
+.template-thumb > .skeleton { position: absolute; inset: 0; border-radius: 0; }
+.template-thumb.creating::after {
+  content: ""; position: absolute; inset: 0; background: rgba(255, 255, 255, 0.6);
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+.template-thumb.small { flex: none; width: 88px; padding: var(--s-2); border-radius: var(--r-md); box-shadow: inset 0 0 0 1px var(--gray-150); }
+
+/* ---------- Catalog (end-user template browsing) ---------- */
+.catalog { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: var(--s-8); align-items: start; }
+.catalog-sidebar { position: sticky; top: var(--s-8); }
+.catalog-tree ul { list-style: none; margin: 0; padding: 0; }
+.catalog-tree ul ul { padding-left: 14px; }
+.catalog-cat { display: flex; align-items: center; gap: 2px; }
+.catalog-tree > .catalog-cat { padding-left: 18px; margin-bottom: 2px; }
+.catalog-cat .layer-caret { height: 32px; }
+.catalog-cat a {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: var(--r-sm);
+  color: var(--text-2); font-size: var(--fs-md); font-weight: 500;
+  transition: background-color var(--dur-fast), color var(--dur-fast);
+}
+.catalog-cat a:hover { background: var(--surface-hover); color: var(--text); text-decoration: none; }
+.catalog-cat a[aria-current="page"] { background: var(--accent-50); color: var(--accent-700); font-weight: 600; }
+.catalog-cat a[aria-current="page"] .panel-count { background: var(--accent-100); color: var(--accent-700); }
+.catalog-cat .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.breadcrumbs ol { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 var(--s-2); padding: 0; font-size: var(--fs-sm); color: var(--text-dim); }
+.breadcrumbs li { display: inline-flex; align-items: center; gap: 6px; }
+.breadcrumbs li + li::before { content: "›"; color: var(--text-faint); }
+.breadcrumbs a { color: var(--text-dim); }
+.breadcrumbs a:hover { color: var(--text); }
+.breadcrumbs [aria-current="page"] { color: var(--text); font-weight: 500; }
+
+.catalog-header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: var(--s-4); margin-bottom: var(--s-5); }
+.catalog-header .subtitle { margin: 0; }
+.catalog-tools { display: flex; align-items: center; gap: var(--s-2); }
+.catalog-tools .search-field input { width: 220px; height: 32px; background: var(--surface); border-color: var(--border); box-shadow: var(--shadow-xs); }
+.catalog-tools select { width: auto; height: 32px; font-size: var(--fs-sm); }
+
+.subcategory-chips { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-5); }
+.subcategory-chip {
+  display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 12px; border-radius: var(--r-pill);
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-2); font-size: var(--fs-sm); font-weight: 550;
+  box-shadow: var(--shadow-xs); transition: border-color var(--dur-fast), color var(--dur-fast);
+}
+.subcategory-chip:hover { border-color: var(--accent-200); color: var(--accent-700); text-decoration: none; }
+
+@media (max-width: 860px) {
+  .catalog { grid-template-columns: minmax(0, 1fr); gap: var(--s-5); }
+  .catalog-sidebar { position: static; }
+}
+
+/* Admin: catalog management */
+.category-name { display: inline-flex; align-items: center; gap: 8px; }
+.category-branch { width: 10px; height: 10px; margin-top: -6px; border-left: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); border-bottom-left-radius: 3px; }
+.category-edit, .template-details-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-3); }
+.category-edit > div:not(.row), .template-details-form > div:not(.row) { flex: 1; min-width: 160px; }
+.category-edit label, .template-details-form label { margin-top: 0; }
+.admin-template-head { align-items: flex-start; }
+.admin-template-head > .row:first-child { flex: 1; min-width: 0; align-items: flex-start; }
+.template-details-form { flex: 1; max-width: 420px; }
+.template-details-form > div:not(.row) { flex-basis: 100%; }
+.admin-template-head h3 { margin-top: 4px; }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--s-2); padding: var(--s-8) var(--s-5); color: var(--text-dim); }
 .empty-state .empty-icon {

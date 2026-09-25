@@ -16,6 +16,7 @@ import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, 
 import { syncFieldsWithLocks, type FieldSyncResult } from "./field-sync";
 
 const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
+const THUMBNAIL_MAX_DIMENSION = 640;
 
 const PSD_MAGIC = Buffer.from("8BPS", "ascii");
 export const MAX_PSD_UPLOAD_BYTES = 200 * 1024 * 1024;
@@ -53,6 +54,7 @@ export class TemplatesService {
 
   async listAllForAdmin() {
     return this.prisma.template.findMany({
+      where: { deletedAt: null },
       include: {
         currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } },
         versions: { select: { id: true, versionNo: true, ingestStatus: true, publishedAt: true, _count: { select: { fields: true } } }, orderBy: { versionNo: "desc" } },
@@ -63,24 +65,27 @@ export class TemplatesService {
 
   async listPublished(categoryId?: string) {
     return this.prisma.template.findMany({
-      where: { status: TemplateStatus.PUBLISHED, ...(categoryId ? { categoryId } : {}) },
+      where: { status: TemplateStatus.PUBLISHED, deletedAt: null, ...(categoryId ? { categoryId } : {}) },
       include: { currentVersion: { select: { id: true, versionNo: true, nativeDpi: true } } },
       orderBy: { updatedAt: "desc" },
     });
   }
 
   async get(id: string) {
-    const template = await this.prisma.template.findUnique({
-      where: { id },
+    const template = await this.prisma.template.findFirst({
+      where: { id, deletedAt: null },
       include: { currentVersion: true },
     });
     if (!template) throw new NotFoundException("Template not found.");
     return template;
   }
 
+  private async assertCategoryExists(categoryId: string) {
+    if (!(await this.prisma.templateCategory.findUnique({ where: { id: categoryId } }))) throw new BadRequestException("Unknown category.");
+  }
+
   async create(dto: CreateTemplateDto, actorId: string) {
-    const category = await this.prisma.templateCategory.findUnique({ where: { id: dto.categoryId } });
-    if (!category) throw new BadRequestException("Unknown category.");
+    await this.assertCategoryExists(dto.categoryId);
     const template = await this.prisma.template.create({
       data: { name: dto.name, categoryId: dto.categoryId, visibilityScope: dto.visibilityScope, status: TemplateStatus.DRAFT },
     });
@@ -90,9 +95,25 @@ export class TemplatesService {
 
   async update(id: string, dto: UpdateTemplateDto, actorId: string) {
     await this.get(id);
+    if (dto.categoryId) await this.assertCategoryExists(dto.categoryId);
     const template = await this.prisma.template.update({ where: { id }, data: dto });
     await this.audit.record({ actorId, action: "template.updated", resourceType: "Template", resourceId: id, metadata: dto });
     return template;
+  }
+
+  /**
+   * Projects pin a version and render from its scene graph and fields, so a template they use only leaves the catalog
+   * (they keep opening and exporting); one nobody used is removed with its versions.
+   */
+  async remove(id: string, actorId: string) {
+    const template = await this.get(id);
+    const projectCount = await this.prisma.project.count({ where: { templateId: id } });
+    if (projectCount > 0) {
+      await this.prisma.template.update({ where: { id }, data: { deletedAt: new Date() } });
+    } else {
+      await this.prisma.template.delete({ where: { id } });
+    }
+    await this.audit.record({ actorId, action: "template.deleted", resourceType: "Template", resourceId: id, metadata: { name: template.name, projectCount } });
   }
 
   async uploadVersion(templateId: string, file: { buffer: Buffer; originalname: string; mimetype: string }, actorId: string) {
@@ -251,13 +272,39 @@ export class TemplatesService {
     });
   }
 
-  /** Renders the template exactly as authored, no field overrides — the admin's field-mapping preview. */
-  async preview(templateId: string, versionId: string): Promise<{ dataUrl: string }> {
+  /** Renders the template exactly as authored, no field overrides, as a PNG no larger than `maxDimension` on either side. */
+  private async renderAsAuthored(templateId: string, versionId: string, maxDimension: number): Promise<Buffer> {
     const sceneGraph = await this.getSceneGraph(templateId, versionId);
-    const scale = Math.min(1, ADMIN_PREVIEW_MAX_DIMENSION / Math.max(sceneGraph.width, sceneGraph.height));
+    const scale = Math.min(1, maxDimension / Math.max(sceneGraph.width, sceneGraph.height));
     const compositor = new SceneCompositor(new DbBackedAssetSource(this.prisma, this.storage));
-    const result = await compositor.render(sceneGraph, { scale });
-    return { dataUrl: `data:image/png;base64,${result.png.toString("base64")}` };
+    return (await compositor.render(sceneGraph, { scale })).png;
+  }
+
+  /** The admin's field-mapping preview. */
+  async preview(templateId: string, versionId: string): Promise<{ dataUrl: string }> {
+    const png = await this.renderAsAuthored(templateId, versionId, ADMIN_PREVIEW_MAX_DIMENSION);
+    return { dataUrl: `data:image/png;base64,${png.toString("base64")}` };
+  }
+
+  /** The catalog card image. A published version's artwork can't change, so it's rendered once and kept. */
+  async thumbnail(templateId: string, versionId: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    const version = await this.getVersion(templateId, versionId);
+    if (!version.publishedAt) throw new NotFoundException("Only published template versions have a thumbnail.");
+    if (version.thumbnailAssetId) {
+      const asset = await this.prisma.asset.findUniqueOrThrow({ where: { id: version.thumbnailAssetId } });
+      return { bytes: await this.storage.getAssetBytes(asset.storageKey), mimeType: asset.mimeType };
+    }
+
+    const png = await this.renderAsAuthored(templateId, versionId, THUMBNAIL_MAX_DIMENSION);
+    const { data, info } = await sharp(png).webp({ quality: 82 }).toBuffer({ resolveWithObject: true });
+    const asset = await this.storage.storeAsset({ data, mimeType: "image/webp", ownerType: AssetOwnerType.TEMPLATE_THUMBNAIL, hint: `thumb_${versionId}`, width: info.width, height: info.height });
+    // Concurrent first views each render one: the first saved is kept and the rest are discarded.
+    const { count } = await this.prisma.templateVersion.updateMany({ where: { id: versionId, thumbnailAssetId: null }, data: { thumbnailAssetId: asset.id } });
+    if (count === 0) {
+      await this.prisma.asset.delete({ where: { id: asset.id } });
+      await this.storage.deleteByKey(asset.storageKey);
+    }
+    return { bytes: data, mimeType: "image/webp" };
   }
 
   async listFields(templateId: string, versionId: string) {
