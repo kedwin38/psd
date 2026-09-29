@@ -1,7 +1,85 @@
 import { useState } from "react";
 import { setPassword } from "../lib/auth-api";
 import { ApiError } from "../lib/api";
+import { useStepUp } from "../components/StepUpDialog";
 import { RecoveryCodes, TotpEnrollment } from "./TotpEnrollment";
+
+/**
+ * Changes the account's own password at any time (not just during first-time setup), for anyone
+ * signed in — admins included. Re-verifies with a step-up challenge first, same as any other
+ * sensitive account change (spec §12); the API itself would reject a change without one anyway,
+ * this just gets that confirmation up front instead of a failed submit.
+ */
+function ChangePasswordCard() {
+  const { stepUp, dialog: stepUpDialog } = useStepUp();
+  const [password, setPasswordValue] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSuccess(false);
+    if (password !== confirm) {
+      setError("Those passwords don't match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
+      await setPassword(password, stepUpToken);
+      setPasswordValue("");
+      setConfirm("");
+      setSuccess(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? (err.detail ?? err.title) : "Could not change your password.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Change your password</h2>
+      <p className="hint">You'll be asked to confirm it's you first.</p>
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
+      )}
+      {success && <div className="success-box">Your password was changed.</div>}
+      <form onSubmit={submit} className="stack">
+        <label htmlFor="change-password-new">New password</label>
+        <input
+          id="change-password-new"
+          type="password"
+          value={password}
+          onChange={(e) => setPasswordValue(e.target.value)}
+          minLength={12}
+          autoComplete="new-password"
+          required
+        />
+        <label htmlFor="change-password-confirm">Confirm new password</label>
+        <input
+          id="change-password-confirm"
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          minLength={12}
+          autoComplete="new-password"
+          required
+        />
+        <button type="submit" className="primary" disabled={busy}>
+          Change password
+        </button>
+      </form>
+      {stepUpDialog}
+    </div>
+  );
+}
 
 export function TotpEnrollPage() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
@@ -33,6 +111,8 @@ export function TotpEnrollPage() {
         password then always asks for a code from the app too.
       </p>
       {error && <div className="error-box">{error}</div>}
+
+      <ChangePasswordCard />
 
       {!recoveryCodes && (
         <div className="card">

@@ -9,7 +9,17 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   API_PORT: z.coerce.number().int().positive().default(3000),
   API_PUBLIC_URL: z.string().default("http://localhost:3000"),
-  CORS_ORIGIN: z.string().min(1),
+  // Comma-separated so a domain cutover (an old *.up.railway.app URL alongside a new custom
+  // domain, say) can allow both at once instead of an all-or-nothing single origin.
+  CORS_ORIGIN: z
+    .string()
+    .min(1)
+    .transform((v) =>
+      v
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean),
+    ),
   // Railway/Cloudflare front the app with a reverse proxy in production; without
   // this, req.ip (used for rate limiting and the audit log) would be the proxy's
   // address for every request, not the caller's — breaking both.

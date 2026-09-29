@@ -49,8 +49,10 @@ export async function enrollTotpVerify(code: string): Promise<{ recoveryCodes: s
   return api.post("/auth/totp/enroll/verify", { code });
 }
 
-export async function setPassword(password: string): Promise<void> {
-  await api.post("/auth/password", { password });
+/** Sets or changes the account's password. Changing an *existing* password requires a step-up
+ *  token (spec §12); the API enforces this itself, so omitting one there fails, not here. */
+export async function setPassword(password: string, stepUpToken?: string): Promise<void> {
+  await api.post("/auth/password", { password }, stepUpToken);
 }
 
 export type StepUpMethod = "passkey" | "totp";
