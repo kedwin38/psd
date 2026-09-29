@@ -20,6 +20,7 @@ import { QueueModule } from "./queue/queue.module";
 import { AdminModule } from "./admin/admin.module";
 import { SettingsModule } from "./settings/settings.module";
 import { MessagesModule } from "./messages/messages.module";
+import { IdPhotoModule } from "./id-photo/id-photo.module";
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { MessagesModule } from "./messages/messages.module";
     AdminModule,
     SettingsModule,
     MessagesModule,
+    IdPhotoModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },

@@ -7,9 +7,11 @@ import { AuditModule } from "../audit/audit.module";
 import { StorageModule } from "../storage/storage.module";
 import { IngestionProcessorService } from "./ingestion.processor";
 import { RenderProcessorService } from "./render.processor";
+import { IdPhotoProcessorService } from "./id-photo.processor";
+import { FaceDetectorService } from "../id-photo/face-detector";
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }), PrismaModule, RedisModule, AuditModule, StorageModule],
-  providers: [IngestionProcessorService, RenderProcessorService],
+  providers: [IngestionProcessorService, RenderProcessorService, IdPhotoProcessorService, FaceDetectorService],
 })
 export class WorkerModule {}

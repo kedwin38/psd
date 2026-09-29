@@ -23,7 +23,8 @@ RUN pnpm --filter @psd-studio/scene-graph run build \
   && pnpm --filter @psd-studio/psd-engine run build \
   && pnpm --filter @psd-studio/api run prisma:generate \
   && pnpm --filter @psd-studio/api exec nest build \
-  && cp -r apps/api/src/generated apps/api/dist/generated
+  && cp -r apps/api/src/generated apps/api/dist/generated \
+  && cp -r apps/api/models apps/api/dist/models
 
 # --- deploy: resolve a self-contained, production-only package directory ---
 FROM build AS deploy

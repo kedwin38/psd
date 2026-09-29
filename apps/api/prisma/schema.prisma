@@ -83,6 +83,7 @@ model User {
   exportJobsRequested ExportJob[] @relation("ExportJobRequestedBy")
   messagesInThread    Message[] @relation("MessageThread")
   messagesAuthored    Message[] @relation("MessageAuthor")
+  idPhotoJobs         IdPhotoJob[]
 
   @@map("users")
 }
@@ -314,6 +315,8 @@ enum AssetOwnerType {
   TEMPLATE_THUMBNAIL
   WATERMARK
   MESSAGE_IMAGE
+  ID_PHOTO_SOURCE
+  ID_PHOTO_OUTPUT
 }
 
 model Asset {
@@ -335,9 +338,50 @@ model Asset {
   exportJobs       ExportJob[] @relation("ExportOutputAsset")
   watermarkOf      AppSettings?      @relation("AppSettingsWatermark")
   messageOf        Message?
+  idPhotoSourceOf  IdPhotoJob?       @relation("IdPhotoSourceAsset")
+  idPhotoOutputOf  IdPhotoJob?       @relation("IdPhotoOutputAsset")
 
   @@index([projectId])
   @@map("assets")
+}
+
+// ---------------------------------------------------------------------------
+// ID photo editor: uploads a personal photo, auto-corrects lighting/exposure/
+// white balance and background, auto-crops to a passport-style spec using
+// real face-landmark detection. Never retouches facial features — an ID
+// photo has to show the subject's true appearance.
+// ---------------------------------------------------------------------------
+
+enum IdPhotoStandard {
+  US_PASSPORT
+  ICAO
+}
+
+enum IdPhotoStatus {
+  QUEUED
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+model IdPhotoJob {
+  id            String          @id @default(uuid())
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  standard      IdPhotoStandard
+  status        IdPhotoStatus   @default(QUEUED)
+  sourceAsset   Asset           @relation("IdPhotoSourceAsset", fields: [sourceAssetId], references: [id])
+  sourceAssetId String          @unique
+  outputAsset   Asset?          @relation("IdPhotoOutputAsset", fields: [outputAssetId], references: [id], onDelete: SetNull)
+  outputAssetId String?         @unique
+  // ComplianceReport (below) once COMPLETE; null otherwise.
+  report        Json?
+  error         String?
+  createdAt     DateTime        @default(now())
+  completedAt   DateTime?
+
+  @@index([userId, createdAt])
+  @@map("id_photo_jobs")
 }
 
 // ---------------------------------------------------------------------------

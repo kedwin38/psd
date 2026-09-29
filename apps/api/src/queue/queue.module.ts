@@ -2,10 +2,11 @@ import { Global, Module } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Queue } from "bullmq";
 import type { Env } from "../config/env";
-import { INGESTION_QUEUE, RENDER_QUEUE } from "./queue.constants";
+import { ID_PHOTO_QUEUE, INGESTION_QUEUE, RENDER_QUEUE } from "./queue.constants";
 
 export const INGESTION_QUEUE_TOKEN = Symbol("INGESTION_QUEUE");
 export const RENDER_QUEUE_TOKEN = Symbol("RENDER_QUEUE");
+export const ID_PHOTO_QUEUE_TOKEN = Symbol("ID_PHOTO_QUEUE");
 
 function connectionFromUrl(url: string) {
   const parsed = new URL(url);
@@ -37,7 +38,13 @@ function connectionFromUrl(url: string) {
         new Queue(RENDER_QUEUE, { connection: connectionFromUrl(config.get("REDIS_URL")) }),
       inject: [ConfigService],
     },
+    {
+      provide: ID_PHOTO_QUEUE_TOKEN,
+      useFactory: (config: ConfigService<Env, true>) =>
+        new Queue(ID_PHOTO_QUEUE, { connection: connectionFromUrl(config.get("REDIS_URL")) }),
+      inject: [ConfigService],
+    },
   ],
-  exports: [INGESTION_QUEUE_TOKEN, RENDER_QUEUE_TOKEN],
+  exports: [INGESTION_QUEUE_TOKEN, RENDER_QUEUE_TOKEN, ID_PHOTO_QUEUE_TOKEN],
 })
 export class QueueModule {}
