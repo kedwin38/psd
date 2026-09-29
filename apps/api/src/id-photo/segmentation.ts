@@ -102,6 +102,63 @@ function keepLargestComponent(mask: Uint8Array, width: number, height: number): 
 }
 
 /**
+ * Fills every "background" region the mask has that isn't actually reachable from the photo's
+ * edge — a real background pixel can always be traced back to the frame border by only crossing
+ * other background pixels; anything BodyPix marked as background but sealed off entirely inside the
+ * foreground (a hole punched in the middle of a face or a chest, say, from a confusing shadow or
+ * fabric pattern) is topologically impossible as real background and can only be a misclassification.
+ * A person's photo is one solid, hole-free object; this makes the mask agree, regardless of how
+ * large the hole is — unlike a blur/closing pass, which only bridges small gaps.
+ */
+function fillEnclosedHoles(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const n = width * height;
+  const reachable = new Uint8Array(n);
+  const stack = new Int32Array(n);
+  let top = 0;
+
+  const seed = (idx: number) => {
+    if (!mask[idx] && !reachable[idx]) {
+      reachable[idx] = 1;
+      stack[top++] = idx;
+    }
+  };
+  for (let x = 0; x < width; x++) {
+    seed(x);
+    seed((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y++) {
+    seed(y * width);
+    seed(y * width + width - 1);
+  }
+
+  while (top > 0) {
+    const idx = stack[--top]!;
+    const x = idx % width;
+    const y = (idx / width) | 0;
+    if (x > 0 && !mask[idx - 1] && !reachable[idx - 1]) {
+      reachable[idx - 1] = 1;
+      stack[top++] = idx - 1;
+    }
+    if (x < width - 1 && !mask[idx + 1] && !reachable[idx + 1]) {
+      reachable[idx + 1] = 1;
+      stack[top++] = idx + 1;
+    }
+    if (y > 0 && !mask[idx - width] && !reachable[idx - width]) {
+      reachable[idx - width] = 1;
+      stack[top++] = idx - width;
+    }
+    if (y < height - 1 && !mask[idx + width] && !reachable[idx + width]) {
+      reachable[idx + width] = 1;
+      stack[top++] = idx + width;
+    }
+  }
+
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = mask[i] || !reachable[i] ? 255 : 0;
+  return out;
+}
+
+/**
  * Runs one spatial op on a single-channel mask buffer and returns a single-channel buffer back.
  * sharp silently promotes a single-channel raw buffer to 3-channel sRGB through several spatial ops
  * (blur, median) unless the pipeline is explicitly told to stay greyscale — .greyscale() right
@@ -170,8 +227,9 @@ export class SegmentationService {
     const binary = Buffer.from(result.data.map((v) => (v ? 255 : 0)));
     let alpha: Buffer = binary;
     if (reliable) {
-      const singleBlob = Buffer.from(keepLargestComponent(new Uint8Array(binary), result.width, result.height));
-      const denoised = await maskOp(singleBlob, result.width, result.height, (img) => img.median(MASK_DENOISE_WINDOW));
+      const singleBlob = keepLargestComponent(new Uint8Array(binary), result.width, result.height);
+      const holesFilled = Buffer.from(fillEnclosedHoles(singleBlob, result.width, result.height));
+      const denoised = await maskOp(holesFilled, result.width, result.height, (img) => img.median(MASK_DENOISE_WINDOW));
       const closedBlur = await maskOp(denoised, result.width, result.height, (img) => img.blur(MASK_CLOSE_BLUR_SIGMA));
       const closed = await maskOp(closedBlur, result.width, result.height, (img) => img.threshold(MASK_CLOSE_THRESHOLD));
       alpha = await maskOp(closed, result.width, result.height, (img) => img.blur(MASK_FEATHER_SIGMA));
