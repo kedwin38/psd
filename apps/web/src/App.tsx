@@ -15,6 +15,7 @@ import { UsersAdminPage } from "./admin/UsersAdminPage";
 import { SettingsAdminPage } from "./admin/SettingsAdminPage";
 import { MessagesAdminPage } from "./admin/MessagesAdminPage";
 import { MessagesPage } from "./messages/MessagesPage";
+import { IdPhotoPage } from "./id-photo/IdPhotoPage";
 import type { RoleName } from "./lib/types";
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: RoleName[] }) {
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/" element={<GalleryPage />} />
         <Route path="/projects/:projectId" element={<ProjectEditorPage />} />
         <Route path="/messages" element={<MessagesPage />} />
+        <Route path="/id-photo" element={<IdPhotoPage />} />
         <Route path="/account/totp" element={<TotpEnrollPage />} />
 
         <Route

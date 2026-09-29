@@ -114,6 +114,33 @@ export interface MessageThread {
   unreadCount: number;
 }
 
+export type IdPhotoStandard = "US_PASSPORT" | "ICAO";
+
+export interface ComplianceCheck {
+  label: string;
+  pass: boolean;
+  detail: string;
+}
+
+export interface ComplianceReport {
+  standard: IdPhotoStandard;
+  outputWidthPx: number;
+  outputHeightPx: number;
+  overallPass: boolean;
+  checks: ComplianceCheck[];
+  faceConfidence: number;
+}
+
+export interface IdPhotoJob {
+  id: string;
+  standard: IdPhotoStandard;
+  status: "QUEUED" | "PROCESSING" | "COMPLETE" | "FAILED";
+  report: ComplianceReport | null;
+  error: string | null;
+  downloadUrl?: string;
+  createdAt: string;
+}
+
 export interface ExportJob {
   id: string;
   status: "QUEUED" | "RENDERING" | "COMPLETE" | "FAILED";

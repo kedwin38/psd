@@ -1188,3 +1188,32 @@ button.field-group-head {
 .messages-admin-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s-3); min-height: 0; }
 .messages-admin-header { flex: none; }
 .messages-admin-header h2 { margin: 0; }
+
+/* ID photo editor */
+.id-photo-standards { display: flex; flex-direction: column; gap: var(--s-2); }
+.id-photo-standard-option {
+  display: flex; flex-direction: column; gap: 2px; padding: var(--s-3) var(--s-4); border: 1px solid var(--border);
+  border-radius: var(--r-md); cursor: pointer; transition: border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.id-photo-standard-option:hover { background: var(--surface-hover); }
+.id-photo-standard-option.selected { border-color: var(--brand-500, #6f86ff); background: var(--brand-50, #eef1ff); }
+.id-photo-standard-option input { margin-right: 8px; }
+.id-photo-standard-label { font-weight: 600; }
+
+.id-photo-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-2);
+  min-height: 180px; padding: var(--s-6); border: 2px dashed var(--border); border-radius: var(--r-lg);
+  color: var(--text-dim); cursor: pointer; text-align: center; transition: border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.id-photo-dropzone:hover, .id-photo-dropzone.drag-over { border-color: var(--brand-500, #6f86ff); background: var(--surface-hover); }
+.id-photo-dropzone-preview { max-width: 100%; max-height: 240px; border-radius: var(--r-md); object-fit: contain; }
+
+.id-photo-processing { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; text-align: center; }
+
+.id-photo-result-preview { width: 100%; max-width: 320px; margin: 0 auto; display: block; border-radius: var(--r-md); }
+
+.id-photo-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.id-photo-checklist li { display: flex; align-items: flex-start; gap: var(--s-2); }
+.id-photo-checklist li.pass svg { color: var(--success-500); flex: none; margin-top: 2px; }
+.id-photo-checklist li.fail svg { color: var(--danger-500); flex: none; margin-top: 2px; }
+.id-photo-checklist p { margin: 0; }
