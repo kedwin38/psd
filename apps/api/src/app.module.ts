@@ -21,6 +21,7 @@ import { AdminModule } from "./admin/admin.module";
 import { SettingsModule } from "./settings/settings.module";
 import { MessagesModule } from "./messages/messages.module";
 import { IdPhotoModule } from "./id-photo/id-photo.module";
+import { BarcodeModule } from "./barcode/barcode.module";
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { IdPhotoModule } from "./id-photo/id-photo.module";
     SettingsModule,
     MessagesModule,
     IdPhotoModule,
+    BarcodeModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: ProblemDetailsFilter },

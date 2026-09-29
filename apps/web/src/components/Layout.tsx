@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useMatch } from "react-router-dom";
-import { Droplets, FolderTree, LayoutGrid, Library, LogOut, MessageCircle, ScanFace, ScrollText, ShieldCheck, Users } from "lucide-react";
+import { Droplets, FolderTree, LayoutGrid, Library, LogOut, MessageCircle, QrCode, ScanFace, ScrollText, ShieldCheck, Users } from "lucide-react";
 import { useAuth } from "../lib/auth-context";
 import { logout } from "../lib/auth-api";
 import type { RoleName } from "../lib/types";
@@ -39,6 +39,10 @@ export function Layout() {
         <NavLink to="/id-photo">
           <ScanFace size={17} aria-hidden="true" />
           ID Photo Editor
+        </NavLink>
+        <NavLink to="/barcode">
+          <QrCode size={17} aria-hidden="true" />
+          Barcode Extractor
         </NavLink>
         <NavLink to={isAdmin ? "/admin/messages" : "/messages"}>
           <MessageCircle size={17} aria-hidden="true" />

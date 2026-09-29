@@ -317,6 +317,8 @@ enum AssetOwnerType {
   MESSAGE_IMAGE
   ID_PHOTO_SOURCE
   ID_PHOTO_OUTPUT
+  BARCODE_SOURCE
+  BARCODE_OUTPUT
 }
 
 model Asset {
