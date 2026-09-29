@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Rocket } from "lucide-react";
 import { api, ApiError } from "../lib/api";
@@ -70,6 +70,24 @@ export function TemplatesAdminPage() {
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkResults, setBulkResults] = useState<BulkUploadResult[] | null>(null);
   const bulkFileInput = useRef<HTMLInputElement>(null);
+  const [uploadMode, setUploadMode] = useState<"single" | "bulk">("single");
+
+  // Grouped by category, in the same order the category tree itself is defined (each category
+  // right after its parent), so the library reads the same way the category picker does. A
+  // template whose category no longer exists (deleted out from under it) falls into its own
+  // trailing "Uncategorized" bucket rather than disappearing.
+  const orderedCategories = useMemo(() => flattenTree(categoryTree(categories)), [categories]);
+  const templatesByCategory = useMemo(() => {
+    const map = new Map<string, AdminTemplate[]>();
+    for (const t of templates) {
+      const list = map.get(t.categoryId);
+      if (list) list.push(t);
+      else map.set(t.categoryId, [t]);
+    }
+    return map;
+  }, [templates]);
+  const knownCategoryIds = new Set(categories.map((c) => c.id));
+  const uncategorizedTemplates = templates.filter((t) => !knownCategoryIds.has(t.categoryId));
 
   const load = async () => {
     const [t, c] = await Promise.all([api.get<AdminTemplate[]>("/templates/admin/all"), api.get<Category[]>("/categories")]);
@@ -215,6 +233,16 @@ export function TemplatesAdminPage() {
     setSelected((prev) => (prev.size === templates.length ? new Set() : new Set(templates.map((t) => t.id))));
   };
 
+  const toggleSelectGroup = (group: AdminTemplate[]) => {
+    const groupIds = group.map((t) => t.id);
+    const allSelected = groupIds.every((id) => selected.has(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of groupIds) (allSelected ? next.delete(id) : next.add(id));
+      return next;
+    });
+  };
+
   const bulkRemove = async () => {
     if (selected.size === 0) return;
     if (!confirm(`Delete ${selected.size} template(s)? This can't be undone. Templates any project already used stay in the catalog as removed but keep working for those projects.`)) return;
@@ -258,6 +286,151 @@ export function TemplatesAdminPage() {
     }
   };
 
+  const renderTemplateCard = (t: AdminTemplate) => (
+    <div className="card" key={t.id}>
+      <div className="row between admin-template-head">
+        <div className="row">
+          <input type="checkbox" checked={selected.has(t.id)} onChange={() => toggleSelected(t.id)} aria-label={`Select ${t.name}`} style={{ marginRight: 4 }} />
+          <TemplateThumbnail template={t} className="small" />
+          {editing?.id === t.id ? (
+            <form onSubmit={saveDetails} className="template-details-form">
+              <div>
+                <label htmlFor="template-rename">Template name</label>
+                <input id="template-rename" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required autoFocus />
+              </div>
+              <div>
+                <label htmlFor="template-move">Category</label>
+                <CategorySelect id="template-move" categories={categories} value={editing.categoryId} onChange={(categoryId) => setEditing({ ...editing, categoryId })} />
+              </div>
+              <div className="row">
+                <button type="submit" className="primary sm" disabled={busy}>
+                  Save
+                </button>
+                <button type="button" className="sm" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div>
+              <h3>
+                {t.name} <span className={`badge ${t.status}`}>{t.status}</span>
+              </h3>
+              <p className="hint">{categoryLabel(categories, t.categoryId) || "Uncategorized"}</p>
+            </div>
+          )}
+        </div>
+        <div className="row">
+          {uploading?.target === t.id && <UploadProgress fraction={uploading.fraction} />}
+          <input
+            type="file"
+            accept=".psd,.psb"
+            ref={(el) => {
+              fileInputs.current[t.id] = el;
+            }}
+            onChange={() => uploadVersion(t.id)}
+            style={{ display: "none" }}
+            id={`upload-${t.id}`}
+          />
+          <button
+            disabled={busy}
+            onClick={() => document.getElementById(`upload-${t.id}`)?.click()}
+            title="Upload a new PSD for this template. End users get it once you publish it."
+          >
+            Replace PSD…
+          </button>
+          {editing?.id !== t.id && (
+            <button disabled={busy} onClick={() => setEditing({ id: t.id, name: t.name, categoryId: t.categoryId })}>
+              Edit
+            </button>
+          )}
+          <button className="danger" disabled={busy} onClick={() => remove(t)}>
+            Delete
+          </button>
+        </div>
+      </div>
+      {t.versions.length > 0 && (
+        <table style={{ marginTop: 10 }}>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Ingestion</th>
+              <th>Editable fields</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {t.versions.map((v) => {
+              const ready = v.ingestStatus === "READY";
+              const live = t.status === "PUBLISHED" && t.currentVersionId === v.id;
+              return (
+                <tr key={v.id}>
+                  <td>
+                    #{v.versionNo} {live && <span className="badge PUBLISHED">current</span>}
+                  </td>
+                  <td>
+                    <span className={`badge ${v.ingestStatus}`}>{v.ingestStatus}</span>
+                  </td>
+                  <td>{ready ? v._count.fields : "—"}</td>
+                  <td>
+                    <div className="row">
+                      {ready && !live && (
+                        <button
+                          className="primary sm"
+                          onClick={() => publish(t.id, v.id)}
+                          disabled={publishing !== null}
+                          aria-label={`Publish ${t.name} version ${v.versionNo}`}
+                          title="Every unlocked layer becomes an editable field"
+                        >
+                          {publishing === v.id ? <Spinner /> : <Rocket size={14} aria-hidden="true" />}
+                          Publish
+                        </button>
+                      )}
+                      {!ready && v.ingestStatus !== "FAILED" && <Spinner label="Processing PSD" />}
+                      <button className="link" onClick={() => navigate(`/admin/templates/${t.id}/versions/${v.id}`)}>
+                        {ready ? "Customize fields →" : "View →"}
+                      </button>
+                      {!live && (
+                        <button
+                          type="button"
+                          className="sm danger ghost"
+                          disabled={removingVersion !== null}
+                          aria-label={`Delete ${t.name} version ${v.versionNo}`}
+                          title="Delete this version"
+                          onClick={() => removeVersion(t, v)}
+                        >
+                          {removingVersion === v.id ? <Spinner /> : "Delete"}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+
+  const renderCategorySection = (key: string, title: string, group: AdminTemplate[]) => {
+    if (group.length === 0) return null;
+    const allSelected = group.every((t) => selected.has(t.id));
+    return (
+      <div key={key} className="admin-template-category-section">
+        <div className="row between admin-template-category-heading">
+          <label className="row" style={{ gap: 6 }}>
+            <input type="checkbox" checked={allSelected} onChange={() => toggleSelectGroup(group)} aria-label={`Select all templates in ${title}`} />
+            <h2 style={{ margin: 0 }}>
+              {title} <span className="hint">({group.length})</span>
+            </h2>
+          </label>
+        </div>
+        <div className="stack">{group.map(renderTemplateCard)}</div>
+      </div>
+    );
+  };
+
   return (
     <div className="grid-2">
       {stepUpDialog}
@@ -283,201 +456,85 @@ export function TemplatesAdminPage() {
           </div>
         )}
         <div className="stack">
-          {templates.map((t) => (
-            <div className="card" key={t.id}>
-              <div className="row between admin-template-head">
-                <div className="row">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(t.id)}
-                    onChange={() => toggleSelected(t.id)}
-                    aria-label={`Select ${t.name}`}
-                    style={{ marginRight: 4 }}
-                  />
-                  <TemplateThumbnail template={t} className="small" />
-                  {editing?.id === t.id ? (
-                    <form onSubmit={saveDetails} className="template-details-form">
-                      <div>
-                        <label htmlFor="template-rename">Template name</label>
-                        <input id="template-rename" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required autoFocus />
-                      </div>
-                      <div>
-                        <label htmlFor="template-move">Category</label>
-                        <CategorySelect id="template-move" categories={categories} value={editing.categoryId} onChange={(categoryId) => setEditing({ ...editing, categoryId })} />
-                      </div>
-                      <div className="row">
-                        <button type="submit" className="primary sm" disabled={busy}>
-                          Save
-                        </button>
-                        <button type="button" className="sm" onClick={() => setEditing(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <div>
-                      <h3>
-                        {t.name} <span className={`badge ${t.status}`}>{t.status}</span>
-                      </h3>
-                      <p className="hint">{categoryLabel(categories, t.categoryId) || "Uncategorized"}</p>
-                    </div>
-                  )}
-                </div>
-                <div className="row">
-                  {uploading?.target === t.id && <UploadProgress fraction={uploading.fraction} />}
-                  <input
-                    type="file"
-                    accept=".psd,.psb"
-                    ref={(el) => {
-                      fileInputs.current[t.id] = el;
-                    }}
-                    onChange={() => uploadVersion(t.id)}
-                    style={{ display: "none" }}
-                    id={`upload-${t.id}`}
-                  />
-                  <button
-                    disabled={busy}
-                    onClick={() => document.getElementById(`upload-${t.id}`)?.click()}
-                    title="Upload a new PSD for this template. End users get it once you publish it."
-                  >
-                    Replace PSD…
-                  </button>
-                  {editing?.id !== t.id && (
-                    <button disabled={busy} onClick={() => setEditing({ id: t.id, name: t.name, categoryId: t.categoryId })}>
-                      Edit
-                    </button>
-                  )}
-                  <button className="danger" disabled={busy} onClick={() => remove(t)}>
-                    Delete
-                  </button>
-                </div>
-              </div>
-              {t.versions.length > 0 && (
-                <table style={{ marginTop: 10 }}>
-                  <thead>
-                    <tr>
-                      <th>Version</th>
-                      <th>Ingestion</th>
-                      <th>Editable fields</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {t.versions.map((v) => {
-                      const ready = v.ingestStatus === "READY";
-                      const live = t.status === "PUBLISHED" && t.currentVersionId === v.id;
-                      return (
-                        <tr key={v.id}>
-                          <td>
-                            #{v.versionNo} {live && <span className="badge PUBLISHED">current</span>}
-                          </td>
-                          <td>
-                            <span className={`badge ${v.ingestStatus}`}>{v.ingestStatus}</span>
-                          </td>
-                          <td>{ready ? v._count.fields : "—"}</td>
-                          <td>
-                            <div className="row">
-                              {ready && !live && (
-                                <button
-                                  className="primary sm"
-                                  onClick={() => publish(t.id, v.id)}
-                                  disabled={publishing !== null}
-                                  aria-label={`Publish ${t.name} version ${v.versionNo}`}
-                                  title="Every unlocked layer becomes an editable field"
-                                >
-                                  {publishing === v.id ? <Spinner /> : <Rocket size={14} aria-hidden="true" />}
-                                  Publish
-                                </button>
-                              )}
-                              {!ready && v.ingestStatus !== "FAILED" && <Spinner label="Processing PSD" />}
-                              <button className="link" onClick={() => navigate(`/admin/templates/${t.id}/versions/${v.id}`)}>
-                                {ready ? "Customize fields →" : "View →"}
-                              </button>
-                              {!live && (
-                                <button
-                                  type="button"
-                                  className="sm danger ghost"
-                                  disabled={removingVersion !== null}
-                                  aria-label={`Delete ${t.name} version ${v.versionNo}`}
-                                  title="Delete this version"
-                                  onClick={() => removeVersion(t, v)}
-                                >
-                                  {removingVersion === v.id ? <Spinner /> : "Delete"}
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          ))}
+          {orderedCategories.map(({ category }) => renderCategorySection(category.id, categoryLabel(categories, category.id), templatesByCategory.get(category.id) ?? []))}
+          {renderCategorySection("uncategorized", "Uncategorized", uncategorizedTemplates)}
           {templates.length === 0 && <p className="hint">No templates yet.</p>}
         </div>
       </div>
       <div className="card" style={{ height: "fit-content" }}>
-        <h2>New template</h2>
-        <form onSubmit={create} className="stack">
-          <div>
-            <label htmlFor="template-psd">PSD file</label>
-            <input id="template-psd" ref={psdInput} type="file" accept=".psd,.psb" onChange={(e) => setPsd(e.target.files?.[0] ?? null)} required />
-          </div>
-          <div>
-            <label htmlFor="template-name">Name</label>
-            <input id="template-name" value={name} onChange={(e) => setName(e.target.value)} required />
-          </div>
-          <div>
-            <label htmlFor="template-category">Category</label>
-            <CategorySelect id="template-category" categories={categories} value={categoryId} onChange={setCategoryId} />
-          </div>
-          <button type="submit" className="primary" disabled={busy || categories.length === 0}>
-            Create template
-          </button>
-          {uploading?.target === "new" && <UploadProgress fraction={uploading.fraction} />}
-          {categories.length === 0 ? (
-            <p className="hint">Create a category first.</p>
-          ) : (
-            <p className="hint">Publish it from the library as soon as it's processed, or customize its fields first.</p>
-          )}
-        </form>
-      </div>
-      <div className="card" style={{ height: "fit-content" }}>
-        <h2>Bulk upload</h2>
-        <p className="hint">Upload several PSDs at once into one category — each becomes its own template, named from its filename.</p>
-        <form onSubmit={bulkUpload} className="stack">
-          <div>
-            <label htmlFor="bulk-psd">PSD files</label>
-            <input
-              id="bulk-psd"
-              ref={bulkFileInput}
-              type="file"
-              accept=".psd,.psb"
-              multiple
-              onChange={(e) => setBulkFiles(Array.from(e.target.files ?? []))}
-              required
-            />
-          </div>
-          <div>
-            <label htmlFor="bulk-category">Category</label>
-            <CategorySelect id="bulk-category" categories={categories} value={bulkCategoryId} onChange={setBulkCategoryId} />
-          </div>
-          <button type="submit" className="primary" disabled={bulkUploading || bulkFiles.length === 0 || !bulkCategoryId || categories.length === 0}>
-            {bulkUploading ? <Spinner /> : null}
-            Upload {bulkFiles.length > 0 ? `${bulkFiles.length} file(s)` : ""}
-          </button>
-          {bulkResults && (
-            <ul className="stack" style={{ fontSize: 13 }}>
-              {bulkResults.map((r, i) => (
-                <li key={i} className={r.error ? "error-box" : "success-box"}>
-                  {r.filename}: {r.error ?? "created"}
-                </li>
-              ))}
-            </ul>
-          )}
-        </form>
+        <h2>Upload templates</h2>
+        <div className="row admin-upload-mode" role="radiogroup" aria-label="Upload mode" style={{ marginBottom: 12 }}>
+          <label className={`upload-mode-option${uploadMode === "single" ? " selected" : ""}`}>
+            <input type="radio" name="upload-mode" checked={uploadMode === "single"} onChange={() => setUploadMode("single")} />
+            Single
+          </label>
+          <label className={`upload-mode-option${uploadMode === "bulk" ? " selected" : ""}`}>
+            <input type="radio" name="upload-mode" checked={uploadMode === "bulk"} onChange={() => setUploadMode("bulk")} />
+            Bulk import
+          </label>
+        </div>
+
+        {uploadMode === "single" ? (
+          <form onSubmit={create} className="stack">
+            <div>
+              <label htmlFor="template-psd">PSD file</label>
+              <input id="template-psd" ref={psdInput} type="file" accept=".psd,.psb" onChange={(e) => setPsd(e.target.files?.[0] ?? null)} required />
+            </div>
+            <div>
+              <label htmlFor="template-name">Name</label>
+              <input id="template-name" value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+            <div>
+              <label htmlFor="template-category">Category</label>
+              <CategorySelect id="template-category" categories={categories} value={categoryId} onChange={setCategoryId} />
+            </div>
+            <button type="submit" className="primary" disabled={busy || categories.length === 0}>
+              Create template
+            </button>
+            {uploading?.target === "new" && <UploadProgress fraction={uploading.fraction} />}
+            {categories.length === 0 ? (
+              <p className="hint">Create a category first.</p>
+            ) : (
+              <p className="hint">Publish it from the library as soon as it's processed, or customize its fields first.</p>
+            )}
+          </form>
+        ) : (
+          <form onSubmit={bulkUpload} className="stack">
+            <p className="hint" style={{ marginTop: 0 }}>
+              Upload several PSDs at once into one category — each becomes its own template, named from its own filename.
+            </p>
+            <div>
+              <label htmlFor="bulk-psd">PSD files</label>
+              <input
+                id="bulk-psd"
+                ref={bulkFileInput}
+                type="file"
+                accept=".psd,.psb"
+                multiple
+                onChange={(e) => setBulkFiles(Array.from(e.target.files ?? []))}
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="bulk-category">Category</label>
+              <CategorySelect id="bulk-category" categories={categories} value={bulkCategoryId} onChange={setBulkCategoryId} />
+            </div>
+            <button type="submit" className="primary" disabled={bulkUploading || bulkFiles.length === 0 || !bulkCategoryId || categories.length === 0}>
+              {bulkUploading ? <Spinner /> : null}
+              Upload {bulkFiles.length > 0 ? `${bulkFiles.length} file(s)` : ""}
+            </button>
+            {categories.length === 0 && <p className="hint">Create a category first.</p>}
+            {bulkResults && (
+              <ul className="stack" style={{ fontSize: 13 }}>
+                {bulkResults.map((r, i) => (
+                  <li key={i} className={r.error ? "error-box" : "success-box"}>
+                    {r.filename}: {r.error ?? "created"}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </form>
+        )}
       </div>
     </div>
   );

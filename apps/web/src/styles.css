@@ -577,6 +577,19 @@ tbody tr:hover td { background: var(--gray-25); }
 .template-details-form > div:not(.row) { flex-basis: 100%; }
 .admin-template-head h3 { margin-top: 4px; }
 
+.admin-template-category-section + .admin-template-category-section { margin-top: var(--s-5); }
+.admin-template-category-heading { margin-bottom: var(--s-2); }
+.admin-template-category-heading h2 { font-size: var(--fs-base); }
+
+.upload-mode-option {
+  display: flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border: 1px solid var(--border);
+  border-radius: var(--r-pill); cursor: pointer; font-weight: 600; font-size: var(--fs-sm);
+  transition: border-color var(--dur-fast), background-color var(--dur-fast);
+}
+.upload-mode-option:hover { background: var(--surface-hover); }
+.upload-mode-option.selected { border-color: var(--brand-500, #6f86ff); background: var(--brand-50, #eef1ff); }
+.upload-mode-option input { margin: 0; }
+
 .empty-state { display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--s-2); padding: var(--s-8) var(--s-5); color: var(--text-dim); }
 .empty-state .empty-icon {
   display: inline-grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; margin-bottom: var(--s-1);
