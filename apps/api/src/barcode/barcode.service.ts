@@ -7,10 +7,12 @@ import { AssetOwnerType } from "../generated/prisma";
 
 export const MAX_BARCODE_UPLOAD_BYTES = 15 * 1024 * 1024;
 
-/** Margin kept around the barcode's own finder/result points, as a fraction of its box size — a
- *  barcode's quiet zone and any residual label text sit just outside those points, and a small
- *  margin keeps the decoder-critical border without dragging in the rest of the pasted material. */
-const CROP_MARGIN_FRACTION = 0.15;
+/** Fixed pixel margin kept around the detected content box, at the *source* image's own
+ *  resolution — just enough to avoid clipping an anti-aliased edge pixel or a barcode's narrow
+ *  quiet zone, not a visible strip of surrounding material. The detector's own region-growing
+ *  (plus its trim-to-content pass) already finds the barcode's true printed edge, so this margin
+ *  only needs to be a few pixels, not a fraction of the barcode's size. */
+const CROP_MARGIN_PX = 4;
 /** Output is upscaled so the shorter crop edge is at least this many pixels, for a crisp, scannable
  *  download — but never downscaled if the source crop is already bigger. */
 const MIN_OUTPUT_EDGE_PX = 900;
@@ -49,12 +51,10 @@ export class BarcodeService {
     const sourceWidth = meta.width!;
     const sourceHeight = meta.height!;
 
-    const marginX = detection.box.width * CROP_MARGIN_FRACTION;
-    const marginY = detection.box.height * CROP_MARGIN_FRACTION;
-    const left = Math.max(0, Math.floor(detection.box.left - marginX));
-    const top = Math.max(0, Math.floor(detection.box.top - marginY));
-    const right = Math.min(sourceWidth, Math.ceil(detection.box.left + detection.box.width + marginX));
-    const bottom = Math.min(sourceHeight, Math.ceil(detection.box.top + detection.box.height + marginY));
+    const left = Math.max(0, Math.floor(detection.box.left - CROP_MARGIN_PX));
+    const top = Math.max(0, Math.floor(detection.box.top - CROP_MARGIN_PX));
+    const right = Math.min(sourceWidth, Math.ceil(detection.box.left + detection.box.width + CROP_MARGIN_PX));
+    const bottom = Math.min(sourceHeight, Math.ceil(detection.box.top + detection.box.height + CROP_MARGIN_PX));
     const cropWidth = Math.max(1, right - left);
     const cropHeight = Math.max(1, bottom - top);
 

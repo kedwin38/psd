@@ -62,6 +62,26 @@ function growEdge(gray: Uint8Array, width: number, height: number, axis: "row" |
 }
 
 /**
+ * Trims a box inward on all four sides until every remaining edge row/column actually contains
+ * high-contrast content across the box's own current span — undoing any slack `growEdge`'s gap
+ * tolerance left on a side that never found more content past the last true bar/text pixel (the
+ * gap tolerance only needs to bridge internal gaps, e.g. between bars and a label underneath; it
+ * shouldn't leave a trailing margin on the outer edges). This is what makes the final crop land
+ * exactly on the barcode's printed edge instead of a few pixels of surrounding material.
+ */
+function trimToContent(gray: Uint8Array, width: number, box: { left: number; top: number; width: number; height: number }) {
+  let left = box.left;
+  let right = box.left + box.width - 1;
+  let top = box.top;
+  let bottom = box.top + box.height - 1;
+  while (left < right && rangeAlongFixedAxis(gray, width, "col", left, top, bottom) < CONTENT_RANGE_THRESHOLD) left++;
+  while (right > left && rangeAlongFixedAxis(gray, width, "col", right, top, bottom) < CONTENT_RANGE_THRESHOLD) right--;
+  while (top < bottom && rangeAlongFixedAxis(gray, width, "row", top, left, right) < CONTENT_RANGE_THRESHOLD) top++;
+  while (bottom > top && rangeAlongFixedAxis(gray, width, "row", bottom, left, right) < CONTENT_RANGE_THRESHOLD) bottom--;
+  return { left, top, width: Math.max(1, right - left + 1), height: Math.max(1, bottom - top + 1) };
+}
+
+/**
  * Grows the true printed extent of the barcode out from ZXing's own (often degenerate) result
  * points. A 1D symbology's result points sit on a single horizontal scanline through the bars —
  * real height, and any attached human-readable label, aren't in them at all. Region-growing along
@@ -80,7 +100,8 @@ function growContentBox(gray: Uint8Array, width: number, height: number, seed: {
   const top = growEdge(gray, width, height, "row", -1, centerY, left, right);
   const bottom = growEdge(gray, width, height, "row", 1, centerY, left, right);
 
-  return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+  const grown = { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+  return trimToContent(gray, width, grown);
 }
 
 /**
