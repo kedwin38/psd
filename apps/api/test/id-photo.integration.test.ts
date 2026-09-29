@@ -13,6 +13,8 @@ const { TokenService } = requireDist("../dist/auth/token.service") as { TokenSer
 const { RoleName } = requireDist("../dist/generated/prisma") as typeof import("../src/generated/prisma");
 
 const SAMPLE_FACE = readFileSync(join(__dirname, "fixtures/id-photo-sample.jpg"));
+const TILTED_FACE = readFileSync(join(__dirname, "fixtures/id-photo-tilted-sample.jpg"));
+const GROUP_PHOTO = readFileSync(join(__dirname, "fixtures/id-photo-group-sample.jpg"));
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -27,9 +29,10 @@ function binary(res: request.Test) {
 }
 
 /**
- * The ID photo editor: real face-landmark detection (no stub) drives an auto-crop to the chosen
- * standard's head-size/eye-line spec, auto white balance/exposure, background flattening when safe,
- * and head-tilt leveling — verified end to end against a real photo through the actual worker.
+ * The ID photo editor: real face-landmark detection (SSD Mobilenet v1 + 68-point landmarks, no
+ * stub) drives an auto-crop to the chosen standard's head-size/eye-line spec, auto white
+ * balance/exposure, real deep-segmentation background replacement (BodyPix/ResNet50), and
+ * head-tilt leveling — verified end to end against real photos through the actual worker.
  */
 describe("ID photo editor", () => {
   let app: INestApplication;
@@ -89,10 +92,15 @@ describe("ID photo editor", () => {
     expect(report.outputWidthPx).toBe(600);
     expect(report.outputHeightPx).toBe(600);
     expect(report.faceConfidence).toBeGreaterThan(0.3);
-    const headSize = report.checks.find((c) => c.label === "Head size");
-    const eyePosition = report.checks.find((c) => c.label === "Eye position");
-    expect(headSize?.pass).toBe(true);
-    expect(eyePosition?.pass).toBe(true);
+
+    // Every check the frontier pipeline actually runs shows up, and passes against a real, clean photo.
+    const labels = report.checks.map((c) => c.label);
+    expect(labels).toEqual(
+      expect.arrayContaining(["Head size", "Eye position", "Background", "Photo coverage", "Head pose", "Eyes open", "Mouth closed", "Sharpness", "Even lighting", "Brightness", "Resolution"]),
+    );
+    for (const label of ["Head size", "Eye position", "Background", "Head pose", "Eyes open", "Mouth closed", "Sharpness", "Even lighting", "Brightness"]) {
+      expect(report.checks.find((c) => c.label === label)?.pass, `expected "${label}" to pass`).toBe(true);
+    }
 
     // The signed URL is absolute (http://host/api/v1/assets/download?...); supertest needs just the
     // path+query to route it through the same in-memory app instance the rest of the test uses.
@@ -116,14 +124,25 @@ describe("ID photo editor", () => {
   }, 30_000);
 
   it("levels a visibly tilted head and reports the correction, rather than silently cropping around the tilt", async () => {
-    const created = await create(userToken, "US_PASSPORT", SAMPLE_FACE);
+    const created = await create(userToken, "US_PASSPORT", TILTED_FACE);
     const job = await waitForCompletion(created.body.id, userToken);
-    const report = job.report as { checks: { label: string; detail: string }[] };
+    expect(job.status).toBe("COMPLETE");
+    const report = job.report as { checks: { label: string; pass: boolean; detail: string }[] };
     const pose = report.checks.find((c) => c.label === "Head pose");
     expect(pose).toBeTruthy();
-    // The fixture photo has a real, substantial head tilt; the leveling step must have actually run.
-    expect(pose!.detail).toMatch(/tilt|level/i);
+    // The fixture photo has a real, substantial (~18°) head tilt; the leveling step must have
+    // actually run and corrected it enough to pass, not just silently cropped around it.
+    expect(pose!.detail).toMatch(/auto-leveled/i);
+    expect(pose!.pass).toBe(true);
   }, 30_000);
+
+  it("rejects a photo with more than one face, rather than silently picking one", async () => {
+    const created = await create(userToken, "US_PASSPORT", GROUP_PHOTO);
+    expect(created.status).toBe(201);
+    const job = await waitForCompletion(created.body.id, userToken);
+    expect(job.status).toBe("FAILED");
+    expect(job.error).toContain("faces");
+  }, 15_000);
 
   it("fails clearly, without a fake success, when no face is present", async () => {
     const blank = await sharp({ create: { width: 400, height: 400, channels: 3, background: "#8899aa" } }).jpeg().toBuffer();

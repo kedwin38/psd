@@ -9,9 +9,10 @@ import { IngestionProcessorService } from "./ingestion.processor";
 import { RenderProcessorService } from "./render.processor";
 import { IdPhotoProcessorService } from "./id-photo.processor";
 import { FaceDetectorService } from "../id-photo/face-detector";
+import { SegmentationService } from "../id-photo/segmentation";
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }), PrismaModule, RedisModule, AuditModule, StorageModule],
-  providers: [IngestionProcessorService, RenderProcessorService, IdPhotoProcessorService, FaceDetectorService],
+  providers: [IngestionProcessorService, RenderProcessorService, IdPhotoProcessorService, FaceDetectorService, SegmentationService],
 })
 export class WorkerModule {}

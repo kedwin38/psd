@@ -7,6 +7,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AuditService } from "../audit/audit.service";
 import { StorageService } from "../storage/storage.service";
 import { FaceDetectorService } from "../id-photo/face-detector";
+import { SegmentationService } from "../id-photo/segmentation";
 import { detectLeveledFace } from "../id-photo/level";
 import { processIdPhoto } from "../id-photo/processor";
 import { ID_PHOTO_QUEUE, type IdPhotoJobData } from "../queue/queue.constants";
@@ -29,6 +30,7 @@ export class IdPhotoProcessorService implements OnModuleInit, OnModuleDestroy {
     private readonly audit: AuditService,
     private readonly storage: StorageService,
     private readonly faceDetector: FaceDetectorService,
+    private readonly segmenter: SegmentationService,
   ) {}
 
   onModuleInit(): void {
@@ -56,7 +58,7 @@ export class IdPhotoProcessorService implements OnModuleInit, OnModuleDestroy {
       // level) is measured against the same upright frame the subject actually sees.
       const uprightSource = await sharp(sourceBuffer).rotate().png().toBuffer();
       const leveled = await detectLeveledFace(uprightSource, this.faceDetector);
-      const { png, report } = await processIdPhoto(leveled.png, record.standard, leveled.face, leveled.rolledDegrees);
+      const { png, report } = await processIdPhoto(leveled.png, record.standard, leveled.face, this.segmenter, leveled.rolledDegrees);
 
       const outputAsset = await this.storage.storeAsset({
         data: png,
