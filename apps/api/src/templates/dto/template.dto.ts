@@ -23,10 +23,11 @@ export const BulkUploadTemplatesSchema = z.object({
 });
 export type BulkUploadTemplatesDto = z.infer<typeof BulkUploadTemplatesSchema>;
 
-export const BulkDeleteTemplatesSchema = z.object({
+// Shared by bulk-delete and bulk-publish — both just act on a list of template ids.
+export const BulkTemplateIdsSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
 });
-export type BulkDeleteTemplatesDto = z.infer<typeof BulkDeleteTemplatesSchema>;
+export type BulkTemplateIdsDto = z.infer<typeof BulkTemplateIdsSchema>;
 
 export const CreateFieldSchema = z.object({
   nodeId: z.string().min(1),

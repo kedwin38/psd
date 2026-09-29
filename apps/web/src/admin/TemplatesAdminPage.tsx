@@ -65,6 +65,7 @@ export function TemplatesAdminPage() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkPublishing, setBulkPublishing] = useState(false);
   const [bulkFiles, setBulkFiles] = useState<File[]>([]);
   const [bulkCategoryId, setBulkCategoryId] = useState("");
   const [bulkUploading, setBulkUploading] = useState(false);
@@ -263,6 +264,26 @@ export function TemplatesAdminPage() {
     }
   };
 
+  const bulkPublish = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`Publish ${selected.size} template(s)? Each publishes its own latest successfully-processed version — end users see it immediately.`)) return;
+    setError(null);
+    setBulkPublishing(true);
+    try {
+      const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
+      const results = await api.post<{ id: string; ok: boolean; alreadyPublished?: boolean; error?: string }[]>("/templates/bulk-publish", { ids: Array.from(selected) }, stepUpToken);
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) setError(`${failed.length} of ${results.length} could not be published: ${failed.map((f) => f.error).join("; ")}`);
+      setSelected(new Set());
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Bulk publish failed."));
+    } finally {
+      setBulkPublishing(false);
+    }
+  };
+
   const bulkUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (bulkFiles.length === 0 || !bulkCategoryId) return;
@@ -448,10 +469,16 @@ export function TemplatesAdminPage() {
               <span className="hint">{selected.size > 0 ? `${selected.size} selected` : "Select all"}</span>
             </label>
             {selected.size > 0 && (
-              <button className="danger sm" disabled={bulkDeleting} onClick={bulkRemove}>
-                {bulkDeleting ? <Spinner /> : null}
-                Delete {selected.size} selected
-              </button>
+              <div className="row" style={{ gap: 8 }}>
+                <button className="primary sm" disabled={bulkPublishing} onClick={bulkPublish}>
+                  {bulkPublishing ? <Spinner /> : <Rocket size={14} aria-hidden="true" />}
+                  Publish {selected.size} selected
+                </button>
+                <button className="danger sm" disabled={bulkDeleting} onClick={bulkRemove}>
+                  {bulkDeleting ? <Spinner /> : null}
+                  Delete {selected.size} selected
+                </button>
+              </div>
             )}
           </div>
         )}

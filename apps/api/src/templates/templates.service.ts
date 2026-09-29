@@ -467,4 +467,35 @@ export class TemplatesService {
     await this.audit.record({ actorId, action: "template.published", resourceType: "TemplateVersion", resourceId: versionId, metadata: { templateId, fieldCount, ...syncMetadata(sync) } });
     return this.get(templateId);
   }
+
+  /**
+   * Publishes each selected template's own latest ready version — the same single-version `publish`
+   * above, just picking that version automatically instead of the admin choosing it, since a bulk
+   * selection is templates, not versions. A template already live on its newest ready version is
+   * left alone and reported as already published, not re-published (that would re-run field sync
+   * for no reason). One template's own reason for not publishing (nothing ingested yet, every layer
+   * locked, …) doesn't stop the rest — every result comes back individually.
+   */
+  async bulkPublish(ids: string[], actorId: string): Promise<Array<{ id: string; ok: boolean; alreadyPublished?: boolean; versionId?: string; error?: string }>> {
+    const results: Array<{ id: string; ok: boolean; alreadyPublished?: boolean; versionId?: string; error?: string }> = [];
+    for (const id of ids) {
+      try {
+        const template = await this.get(id);
+        const latestReady = await this.prisma.templateVersion.findFirst({ where: { templateId: id, ingestStatus: IngestStatus.READY }, orderBy: { versionNo: "desc" } });
+        if (!latestReady) {
+          results.push({ id, ok: false, error: "No successfully-ingested version to publish." });
+          continue;
+        }
+        if (template.currentVersionId === latestReady.id && template.status === TemplateStatus.PUBLISHED) {
+          results.push({ id, ok: true, alreadyPublished: true, versionId: latestReady.id });
+          continue;
+        }
+        await this.publish(id, latestReady.id, actorId);
+        results.push({ id, ok: true, versionId: latestReady.id });
+      } catch (err) {
+        results.push({ id, ok: false, error: err instanceof Error ? err.message : "Unknown error." });
+      }
+    }
+    return results;
+  }
 }

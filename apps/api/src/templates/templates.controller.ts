@@ -4,14 +4,14 @@ import { Throttle } from "@nestjs/throttler";
 import type { Response } from "express";
 import { TemplatesService, MAX_LAYER_IMAGE_BYTES, MAX_PSD_UPLOAD_BYTES } from "./templates.service";
 import {
-  BulkDeleteTemplatesSchema,
+  BulkTemplateIdsSchema,
   BulkUploadTemplatesSchema,
   CreateFieldSchema,
   CreateTemplateSchema,
   UpdateFieldSchema,
   UpdateNodeSchema,
   UpdateTemplateSchema,
-  type BulkDeleteTemplatesDto,
+  type BulkTemplateIdsDto,
   type BulkUploadTemplatesDto,
   type CreateFieldDto,
   type CreateTemplateDto,
@@ -95,8 +95,16 @@ export class TemplatesController {
   @Roles(...ADMIN_ROLES)
   @StepUp()
   @Post("bulk-delete")
-  bulkRemove(@Body(new ZodValidationPipe(BulkDeleteTemplatesSchema)) body: BulkDeleteTemplatesDto, @CurrentUser() user: AuthenticatedUser) {
+  bulkRemove(@Body(new ZodValidationPipe(BulkTemplateIdsSchema)) body: BulkTemplateIdsDto, @CurrentUser() user: AuthenticatedUser) {
     return this.templates.bulkRemove(body.ids, user.id);
+  }
+
+  // Same "literal path ahead of :id routes" reasoning as bulk-upload/bulk-delete above.
+  @Roles(...ADMIN_ROLES)
+  @StepUp()
+  @Post("bulk-publish")
+  bulkPublish(@Body(new ZodValidationPipe(BulkTemplateIdsSchema)) body: BulkTemplateIdsDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.templates.bulkPublish(body.ids, user.id);
   }
 
   @Roles(...ADMIN_ROLES)
