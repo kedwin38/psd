@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { CheckCircle2, ClipboardPaste, Download, QrCode } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { EmptyState, Spinner } from "../components/workspace";
@@ -25,8 +25,10 @@ export function BarcodePage() {
   const [resultPreview, setResultPreview] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const canPasteViaApi = typeof navigator !== "undefined" && "clipboard" in navigator && "read" in navigator.clipboard;
   const dropzone = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(
     () => () => {
@@ -73,9 +75,12 @@ export function BarcodePage() {
           return;
         }
       }
-      setError("No image was found on your clipboard. Copy an image containing a barcode, then click Paste again.");
+      setError(
+        "No image data was found on your clipboard. If you copied a file (e.g. from your file manager, or Copy on a saved image), that isn't image data the browser can read — " +
+          "try opening the image itself and using \"Copy image\", pressing Ctrl/Cmd+V in the box below, or just drop/choose the file directly.",
+      );
     } catch {
-      setError("Couldn't read your clipboard. Your browser may need permission — try pressing Ctrl/Cmd+V in the box below instead.");
+      setError("Couldn't read your clipboard. Your browser may need permission — try pressing Ctrl/Cmd+V in the box below instead, or drop/choose the file directly.");
     }
   };
 
@@ -85,6 +90,15 @@ export function BarcodePage() {
     e.preventDefault();
     const blob = item.getAsFile();
     if (blob) void submit(blob);
+  };
+
+  const chooseFile = () => fileInput.current?.click();
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) void submit(file);
   };
 
   return (
@@ -105,15 +119,38 @@ export function BarcodePage() {
           <h2>Image</h2>
           <div
             ref={dropzone}
-            className="id-photo-dropzone"
+            className={`id-photo-dropzone${dragOver ? " drag-over" : ""}`}
             onPaste={onPasteEvent}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            onClick={chooseFile}
             tabIndex={0}
-            role="group"
-            aria-label="Paste an image containing a barcode here, or use the Paste button"
+            role="button"
+            aria-label="Paste, drop, or choose an image containing a barcode"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") chooseFile();
+            }}
           >
             {sourcePreview ? <img src={sourcePreview} alt="Your pasted image" className="id-photo-dropzone-preview" /> : <QrCode size={28} aria-hidden="true" />}
-            <p>{sourcePreview ? "Click Paste to replace with a different image" : "Click Paste below, or focus here and press Ctrl/Cmd+V"}</p>
+            <p>{sourcePreview ? "Paste, drop, or click to choose a different image" : "Drop an image here, click to choose one, or press Ctrl/Cmd+V"}</p>
           </div>
+          <input
+            ref={fileInput}
+            type="file"
+            className="visually-hidden"
+            tabIndex={-1}
+            aria-label="Choose an image"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void submit(file);
+            }}
+          />
           <button type="button" className="btn primary" onClick={() => void pasteFromClipboard()} disabled={processing} style={{ marginTop: "0.75rem" }}>
             <ClipboardPaste size={15} aria-hidden="true" />
             {canPasteViaApi ? "Paste from clipboard" : "Paste (Ctrl/Cmd+V in the box above)"}
