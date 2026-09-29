@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import * as tf from "@tensorflow/tfjs-node";
 import * as bodyPix from "@tensorflow-models/body-pix";
-import sharp from "sharp";
+import sharp, { type Sharp } from "sharp";
 import { join } from "node:path";
 
 // dist/id-photo/segmentation.js -> dist/models/segmentation (see package.json's build script and
@@ -15,16 +15,24 @@ const MODEL_JSON_PATH = join(__dirname, "..", "models", "segmentation", "model-s
  */
 const MIN_RELIABLE_COVERAGE = 0.04;
 const MAX_RELIABLE_COVERAGE = 0.97;
-/** Blur radius (px) feathered into the binary mask so the composite edge is anti-aliased, not jagged. */
+/** Blur radius (px) feathered into the final mask so the composite edge is anti-aliased, not jagged. */
 const MASK_FEATHER_SIGMA = 1.2;
 /**
- * Median filter window (px) run over the binary mask before feathering. Low-contrast boundaries —
- * a light garment against a light wall, say — make BodyPix's per-pixel classification flicker
+ * Median filter window (px) run over the binary mask first. Low-contrast boundaries — a light
+ * garment against a light wall, say — make BodyPix's per-pixel classification flicker
  * pixel-to-pixel near the edge; a median filter is the standard fix for exactly this kind of
- * salt-and-pepper noise, cleaning up the speckle without softening the real silhouette edge the
- * way a plain blur would.
+ * salt-and-pepper noise.
  */
 const MASK_DENOISE_WINDOW = 9;
+/**
+ * Morphological "closing" (a blur-then-rebinarize pass) run after denoising, to bridge the small
+ * gaps a low-contrast boundary leaves in an otherwise-solid silhouette (a scalloped/bitten-looking
+ * edge along a shoulder, say) without moving the real edge. MASK_CLOSE_THRESHOLD is deliberately
+ * below the neutral midpoint (128): after a blur, a pixel surrounded mostly by foreground reads as
+ * a mid-grey around ~130-180, so a lower cutoff resolves "mostly surrounded by person" as person.
+ */
+const MASK_CLOSE_BLUR_SIGMA = 12;
+const MASK_CLOSE_THRESHOLD = 90;
 
 export interface SegmentationResult {
   /** Single-channel alpha buffer (0-255), same WxH as the input: 255 = subject, 0 = background,
@@ -36,6 +44,78 @@ export interface SegmentationResult {
   coverage: number;
   /** False when coverage looks degenerate enough that the mask probably isn't trustworthy. */
   reliable: boolean;
+}
+
+/**
+ * Keeps only the mask's largest 4-connected blob and zeroes out every other one. BodyPix
+ * occasionally misclassifies a small, disconnected patch elsewhere in the frame (a shadow, a
+ * texture in the background) as "person" — a real defect ("leaving patches on the image"), not
+ * noise a blur or median filter would catch, since a stray patch can itself be solid and
+ * contiguous. The subject is, by construction, the largest contiguous region in any photo where
+ * segmentation is trustworthy at all (that's what "reliable" coverage already means), so this is a
+ * safe, image-specific decision rather than a fixed rule.
+ */
+function keepLargestComponent(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const n = width * height;
+  const labels = new Int32Array(n).fill(-1);
+  const sizes: number[] = [];
+  const stack = new Int32Array(n);
+
+  for (let start = 0; start < n; start++) {
+    if (!mask[start] || labels[start] !== -1) continue;
+    const label = sizes.length;
+    let size = 0;
+    let top = 0;
+    stack[top++] = start;
+    labels[start] = label;
+    while (top > 0) {
+      const idx = stack[--top]!;
+      size++;
+      const x = idx % width;
+      const y = (idx / width) | 0;
+      if (x > 0 && mask[idx - 1] && labels[idx - 1] === -1) {
+        labels[idx - 1] = label;
+        stack[top++] = idx - 1;
+      }
+      if (x < width - 1 && mask[idx + 1] && labels[idx + 1] === -1) {
+        labels[idx + 1] = label;
+        stack[top++] = idx + 1;
+      }
+      if (y > 0 && mask[idx - width] && labels[idx - width] === -1) {
+        labels[idx - width] = label;
+        stack[top++] = idx - width;
+      }
+      if (y < height - 1 && mask[idx + width] && labels[idx + width] === -1) {
+        labels[idx + width] = label;
+        stack[top++] = idx + width;
+      }
+    }
+    sizes.push(size);
+  }
+
+  const out = new Uint8Array(n);
+  if (sizes.length === 0) return out;
+  let largest = 0;
+  for (let i = 1; i < sizes.length; i++) if (sizes[i]! > sizes[largest]!) largest = i;
+  for (let i = 0; i < n; i++) if (labels[i] === largest) out[i] = 255;
+  return out;
+}
+
+/**
+ * Runs one spatial op on a single-channel mask buffer and returns a single-channel buffer back.
+ * sharp silently promotes a single-channel raw buffer to 3-channel sRGB through several spatial ops
+ * (blur, median) unless the pipeline is explicitly told to stay greyscale — .greyscale() right
+ * before the op, and a hard length check after, turn that class of bug into an immediate throw
+ * instead of a silently misaligned mask.
+ */
+async function maskOp(input: Buffer, width: number, height: number, apply: (img: Sharp) => Sharp): Promise<Buffer> {
+  const out = await apply(sharp(input, { raw: { width, height, channels: 1 } }).greyscale())
+    .raw()
+    .toBuffer();
+  if (out.length !== width * height) {
+    throw new Error(`Mask op produced ${out.length} bytes, expected ${width * height} (${width}x${height}, 1 channel).`);
+  }
+  return out;
 }
 
 let netPromise: Promise<bodyPix.BodyPix> | null = null;
@@ -88,17 +168,14 @@ export class SegmentationService {
     const reliable = coverage >= MIN_RELIABLE_COVERAGE && coverage <= MAX_RELIABLE_COVERAGE;
 
     const binary = Buffer.from(result.data.map((v) => (v ? 255 : 0)));
-    // .greyscale() is load-bearing here: without it, sharp's median/blur silently promote a
-    // single-channel raw buffer to 3-channel sRGB output, which would misalign every downstream
-    // per-pixel index.
-    const alpha = reliable
-      ? await sharp(binary, { raw: { width: result.width, height: result.height, channels: 1 } })
-          .greyscale()
-          .median(MASK_DENOISE_WINDOW)
-          .blur(MASK_FEATHER_SIGMA)
-          .raw()
-          .toBuffer()
-      : binary;
+    let alpha: Buffer = binary;
+    if (reliable) {
+      const singleBlob = Buffer.from(keepLargestComponent(new Uint8Array(binary), result.width, result.height));
+      const denoised = await maskOp(singleBlob, result.width, result.height, (img) => img.median(MASK_DENOISE_WINDOW));
+      const closedBlur = await maskOp(denoised, result.width, result.height, (img) => img.blur(MASK_CLOSE_BLUR_SIGMA));
+      const closed = await maskOp(closedBlur, result.width, result.height, (img) => img.threshold(MASK_CLOSE_THRESHOLD));
+      alpha = await maskOp(closed, result.width, result.height, (img) => img.blur(MASK_FEATHER_SIGMA));
+    }
 
     this.logger.debug(`Segmented person: coverage ${(coverage * 100).toFixed(1)}%, reliable=${reliable}`);
     return { alpha, width: result.width, height: result.height, coverage, reliable };

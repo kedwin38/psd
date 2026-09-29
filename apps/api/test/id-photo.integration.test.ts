@@ -110,6 +110,10 @@ describe("ID photo editor", () => {
     const meta = await sharp(download.body as Buffer).metadata();
     expect(meta.width).toBe(600);
     expect(meta.height).toBe(600);
+    // A real transparent cutout, not a flattened opaque photo — and losslessly encoded, not
+    // silently quantized to a palette (both would count as altering the image).
+    expect(meta.hasAlpha).toBe(true);
+    expect(meta.isPalette).toBe(false);
   }, 30_000);
 
   it("processes the same photo into a spec-exact ICAO photo, a different aspect ratio and target proportions", async () => {
