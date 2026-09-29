@@ -39,6 +39,13 @@ function UploadProgress({ fraction }: { fraction: number }) {
   );
 }
 
+interface BulkUploadResult {
+  filename: string;
+  templateId?: string;
+  versionId?: string;
+  error?: string;
+}
+
 export function TemplatesAdminPage() {
   const [templates, setTemplates] = useState<AdminTemplate[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -55,6 +62,14 @@ export function TemplatesAdminPage() {
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
   const navigate = useNavigate();
   const { stepUp, dialog: stepUpDialog } = useStepUp();
+
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkFiles, setBulkFiles] = useState<File[]>([]);
+  const [bulkCategoryId, setBulkCategoryId] = useState("");
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkResults, setBulkResults] = useState<BulkUploadResult[] | null>(null);
+  const bulkFileInput = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     const [t, c] = await Promise.all([api.get<AdminTemplate[]>("/templates/admin/all"), api.get<Category[]>("/categories")]);
@@ -187,6 +202,62 @@ export function TemplatesAdminPage() {
     }
   };
 
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelected((prev) => (prev.size === templates.length ? new Set() : new Set(templates.map((t) => t.id))));
+  };
+
+  const bulkRemove = async () => {
+    if (selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} template(s)? This can't be undone. Templates any project already used stay in the catalog as removed but keep working for those projects.`)) return;
+    setError(null);
+    setBulkDeleting(true);
+    try {
+      const stepUpToken = await stepUp();
+      if (!stepUpToken) return;
+      const results = await api.post<{ id: string; ok: boolean; error?: string }[]>("/templates/bulk-delete", { ids: Array.from(selected) }, stepUpToken);
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length > 0) setError(`${failed.length} of ${results.length} could not be deleted: ${failed.map((f) => f.error).join("; ")}`);
+      setSelected(new Set());
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Bulk delete failed."));
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const bulkUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (bulkFiles.length === 0 || !bulkCategoryId) return;
+    setError(null);
+    setBulkResults(null);
+    setBulkUploading(true);
+    try {
+      const form = new FormData();
+      for (const file of bulkFiles) form.append("files", file);
+      form.append("categoryId", bulkCategoryId);
+      form.append("visibilityScope", "PUBLIC");
+      const results = await api.upload<BulkUploadResult[]>("/templates/bulk-upload", form);
+      setBulkResults(results);
+      setBulkFiles([]);
+      if (bulkFileInput.current) bulkFileInput.current.value = "";
+      await load();
+    } catch (err) {
+      setError(errorText(err, "Bulk upload failed."));
+    } finally {
+      setBulkUploading(false);
+    }
+  };
+
   return (
     <div className="grid-2">
       {stepUpDialog}
@@ -197,11 +268,32 @@ export function TemplatesAdminPage() {
           version to publish when it's ready: end users keep the current one until then, and projects already started stay on theirs.
         </p>
         {error && <div className="error-box">{error}</div>}
+        {templates.length > 0 && (
+          <div className="row between" style={{ marginBottom: 10 }}>
+            <label className="row" style={{ gap: 6 }}>
+              <input type="checkbox" checked={selected.size === templates.length} onChange={toggleSelectAll} aria-label="Select all templates" />
+              <span className="hint">{selected.size > 0 ? `${selected.size} selected` : "Select all"}</span>
+            </label>
+            {selected.size > 0 && (
+              <button className="danger sm" disabled={bulkDeleting} onClick={bulkRemove}>
+                {bulkDeleting ? <Spinner /> : null}
+                Delete {selected.size} selected
+              </button>
+            )}
+          </div>
+        )}
         <div className="stack">
           {templates.map((t) => (
             <div className="card" key={t.id}>
               <div className="row between admin-template-head">
                 <div className="row">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.id)}
+                    onChange={() => toggleSelected(t.id)}
+                    aria-label={`Select ${t.name}`}
+                    style={{ marginRight: 4 }}
+                  />
                   <TemplateThumbnail template={t} className="small" />
                   {editing?.id === t.id ? (
                     <form onSubmit={saveDetails} className="template-details-form">
@@ -349,6 +441,41 @@ export function TemplatesAdminPage() {
             <p className="hint">Create a category first.</p>
           ) : (
             <p className="hint">Publish it from the library as soon as it's processed, or customize its fields first.</p>
+          )}
+        </form>
+      </div>
+      <div className="card" style={{ height: "fit-content" }}>
+        <h2>Bulk upload</h2>
+        <p className="hint">Upload several PSDs at once into one category — each becomes its own template, named from its filename.</p>
+        <form onSubmit={bulkUpload} className="stack">
+          <div>
+            <label htmlFor="bulk-psd">PSD files</label>
+            <input
+              id="bulk-psd"
+              ref={bulkFileInput}
+              type="file"
+              accept=".psd,.psb"
+              multiple
+              onChange={(e) => setBulkFiles(Array.from(e.target.files ?? []))}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="bulk-category">Category</label>
+            <CategorySelect id="bulk-category" categories={categories} value={bulkCategoryId} onChange={setBulkCategoryId} />
+          </div>
+          <button type="submit" className="primary" disabled={bulkUploading || bulkFiles.length === 0 || !bulkCategoryId || categories.length === 0}>
+            {bulkUploading ? <Spinner /> : null}
+            Upload {bulkFiles.length > 0 ? `${bulkFiles.length} file(s)` : ""}
+          </button>
+          {bulkResults && (
+            <ul className="stack" style={{ fontSize: 13 }}>
+              {bulkResults.map((r, i) => (
+                <li key={i} className={r.error ? "error-box" : "success-box"}>
+                  {r.filename}: {r.error ?? "created"}
+                </li>
+              ))}
+            </ul>
           )}
         </form>
       </div>

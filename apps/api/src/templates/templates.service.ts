@@ -12,7 +12,7 @@ import { INGESTION_QUEUE_TOKEN } from "../queue/queue.module";
 import type { IngestionJobData } from "../queue/queue.constants";
 import { AssetOwnerType, IngestStatus, TemplateStatus, type Prisma, type TemplateVersion } from "../generated/prisma";
 import { sniffImageMime } from "../common/image-sniff";
-import type { CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, UpdateTemplateDto } from "./dto/template.dto";
+import type { BulkUploadTemplatesDto, CreateFieldDto, CreateTemplateDto, UpdateFieldDto, UpdateNodeDto, UpdateTemplateDto } from "./dto/template.dto";
 import { syncFieldsWithLocks, type FieldSyncResult } from "./field-sync";
 
 const ADMIN_PREVIEW_MAX_DIMENSION = 1000;
@@ -117,6 +117,26 @@ export class TemplatesService {
   }
 
   /**
+   * Deletes many templates in one request, e.g. an admin clearing out a batch of drafts. Each one goes
+   * through the exact same single-delete path (including the projects-in-use check) so a bulk delete can
+   * never behave differently than deleting the same templates one at a time — it just saves the round trips.
+   * One bad ID doesn't abort the rest: every result (success or its own error) comes back so the admin can
+   * see exactly what happened to each template.
+   */
+  async bulkRemove(ids: string[], actorId: string): Promise<Array<{ id: string; ok: boolean; error?: string }>> {
+    const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+    for (const id of ids) {
+      try {
+        await this.remove(id, actorId);
+        results.push({ id, ok: true });
+      } catch (err) {
+        results.push({ id, ok: false, error: err instanceof Error ? err.message : "Unknown error." });
+      }
+    }
+    return results;
+  }
+
+  /**
    * Removes one earlier version, e.g. a bad upload the admin wants off the list. Never the version currently
    * live (publish a different one first) and never one any project still points at (they keep the exact
    * version they were built on, even after the template moves on — same guarantee as template deletion above).
@@ -186,6 +206,36 @@ export class TemplatesService {
 
     await this.audit.record({ actorId, action: "template.version.uploaded", resourceType: "TemplateVersion", resourceId: version.id, metadata: { templateId, versionNo } });
     return version;
+  }
+
+  /**
+   * Creates one new template per uploaded PSD, named from its own filename, all in the same category —
+   * the same two steps (`create` then `uploadVersion`) a single-template upload already runs, just looped.
+   * Each file is independent: one bad/corrupt PSD fails only its own entry (ingestion itself still happens
+   * asynchronously per version, same as a single upload, so a "success" here means the template and version
+   * row were created, not that ingestion has finished yet).
+   */
+  async bulkCreate(
+    files: Array<{ buffer: Buffer; originalname: string; mimetype: string }>,
+    dto: BulkUploadTemplatesDto,
+    actorId: string,
+  ): Promise<Array<{ filename: string; templateId?: string; versionId?: string; error?: string }>> {
+    await this.assertCategoryExists(dto.categoryId);
+    const results: Array<{ filename: string; templateId?: string; versionId?: string; error?: string }> = [];
+    for (const file of files) {
+      try {
+        const name = file.originalname.replace(/\.(psd|psb)$/i, "") || file.originalname;
+        const template = await this.prisma.template.create({
+          data: { name, categoryId: dto.categoryId, visibilityScope: dto.visibilityScope, status: TemplateStatus.DRAFT },
+        });
+        await this.audit.record({ actorId, action: "template.created", resourceType: "Template", resourceId: template.id, metadata: { bulk: true } });
+        const version = await this.uploadVersion(template.id, file, actorId);
+        results.push({ filename: file.originalname, templateId: template.id, versionId: version.id });
+      } catch (err) {
+        results.push({ filename: file.originalname, error: err instanceof Error ? err.message : "Unknown error." });
+      }
+    }
+    return results;
   }
 
   async getVersion(templateId: string, versionId: string) {

@@ -1,14 +1,18 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from "@nestjs/common";
-import { FileInterceptor } from "@nestjs/platform-express";
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UploadedFile, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor, FilesInterceptor } from "@nestjs/platform-express";
 import { Throttle } from "@nestjs/throttler";
 import type { Response } from "express";
 import { TemplatesService, MAX_LAYER_IMAGE_BYTES, MAX_PSD_UPLOAD_BYTES } from "./templates.service";
 import {
+  BulkDeleteTemplatesSchema,
+  BulkUploadTemplatesSchema,
   CreateFieldSchema,
   CreateTemplateSchema,
   UpdateFieldSchema,
   UpdateNodeSchema,
   UpdateTemplateSchema,
+  type BulkDeleteTemplatesDto,
+  type BulkUploadTemplatesDto,
   type CreateFieldDto,
   type CreateTemplateDto,
   type UpdateFieldDto,
@@ -24,6 +28,7 @@ import { RoleName } from "../generated/prisma";
 import type { AuthenticatedUser } from "../auth/auth.types";
 
 const ADMIN_ROLES = [RoleName.SUPER_ADMIN, RoleName.CONTENT_ADMIN] as const;
+const MAX_BULK_FILES = 50;
 
 @Controller("templates")
 export class TemplatesController {
@@ -53,6 +58,24 @@ export class TemplatesController {
     return this.templates.create(body, user.id);
   }
 
+  // A literal path segment ("bulk-upload"), not a template id — declared ahead of the ":id" routes below
+  // so it can't be shadowed by them, same as "admin/all" above.
+  @Roles(...ADMIN_ROLES)
+  @Post("bulk-upload")
+  @UseInterceptors(FilesInterceptor("files", MAX_BULK_FILES, { limits: { fileSize: MAX_PSD_UPLOAD_BYTES } }))
+  bulkUpload(
+    @UploadedFiles() files: Express.Multer.File[] | undefined,
+    @Body(new ZodValidationPipe(BulkUploadTemplatesSchema)) body: BulkUploadTemplatesDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (!files || files.length === 0) throw new BadRequestException('No files uploaded (expected multipart field "files").');
+    return this.templates.bulkCreate(
+      files.map((f) => ({ buffer: f.buffer, originalname: f.originalname, mimetype: f.mimetype })),
+      body,
+      user.id,
+    );
+  }
+
   @Roles(...ADMIN_ROLES)
   @Patch(":id")
   update(@Param("id") id: string, @Body(new ZodValidationPipe(UpdateTemplateSchema)) body: UpdateTemplateDto, @CurrentUser() user: AuthenticatedUser) {
@@ -65,6 +88,15 @@ export class TemplatesController {
   async remove(@Param("id") id: string, @CurrentUser() user: AuthenticatedUser) {
     await this.templates.remove(id, user.id);
     return { ok: true };
+  }
+
+  // POST, not DELETE-with-body: some clients/proxies drop a DELETE request's body, and this needs one
+  // (the id list) — same reasoning as the literal "bulk-upload" path above, declared ahead of ":id".
+  @Roles(...ADMIN_ROLES)
+  @StepUp()
+  @Post("bulk-delete")
+  bulkRemove(@Body(new ZodValidationPipe(BulkDeleteTemplatesSchema)) body: BulkDeleteTemplatesDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.templates.bulkRemove(body.ids, user.id);
   }
 
   @Roles(...ADMIN_ROLES)

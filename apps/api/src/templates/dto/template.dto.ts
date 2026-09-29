@@ -15,6 +15,19 @@ export const UpdateTemplateSchema = z.object({
 });
 export type UpdateTemplateDto = z.infer<typeof UpdateTemplateSchema>;
 
+// multipart/form-data delivers every non-file field as a string, so this mirrors CreateTemplateSchema
+// minus `name` (one bulk upload makes many templates, one per file, named from each filename).
+export const BulkUploadTemplatesSchema = z.object({
+  categoryId: z.string().uuid(),
+  visibilityScope: z.enum(["PUBLIC", "ORG_RESTRICTED", "PLAN_TIER"]).default("PUBLIC"),
+});
+export type BulkUploadTemplatesDto = z.infer<typeof BulkUploadTemplatesSchema>;
+
+export const BulkDeleteTemplatesSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+});
+export type BulkDeleteTemplatesDto = z.infer<typeof BulkDeleteTemplatesSchema>;
+
 export const CreateFieldSchema = z.object({
   nodeId: z.string().min(1),
   layerPath: z.string().min(1),
