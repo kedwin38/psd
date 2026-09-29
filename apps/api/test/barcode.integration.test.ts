@@ -25,8 +25,9 @@ function binary(res: request.Test) {
 /**
  * Barcode paste-and-extract: a real ZXing decode (Code128, no stub) locates the barcode inside a
  * pasted image that has substantial extra surrounding material, crops down to just the barcode
- * (with a small quiet-zone margin), upscales it, and offers a lossless PNG download — verified
- * against a real synthetic barcode photo through the actual HTTP endpoint.
+ * (with a small quiet-zone margin), upscales it, and offers a lossless, truly transparent PNG
+ * download (only the printed ink is opaque — no background rectangle around it) — verified against
+ * a real synthetic barcode photo through the actual HTTP endpoint.
  */
 describe("Barcode extraction", () => {
   let app: INestApplication;
@@ -74,6 +75,17 @@ describe("Barcode extraction", () => {
     expect(meta.isPalette).toBe(false);
     expect(meta.width).toBe(res.body.width);
     expect(meta.height).toBe(res.body.height);
+    // A real transparent cutout of just the barcode's printed ink, not an opaque rectangle with
+    // the barcode inside it: the fixture's outer crop pixels (its light-grey paper background) must
+    // be transparent, and there must be real opaque ink somewhere inside (the barcode itself).
+    expect(meta.hasAlpha).toBe(true);
+    const raw = await sharp(download.body as Buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data, info } = raw;
+    const corner = data[3];
+    expect(corner).toBeLessThan(40);
+    let opaqueCount = 0;
+    for (let i = 3; i < data.length; i += info.channels) if (data[i]! > 200) opaqueCount++;
+    expect(opaqueCount).toBeGreaterThan(0);
   }, 20_000);
 
   it("fails clearly, without a fake success, when no barcode is present", async () => {

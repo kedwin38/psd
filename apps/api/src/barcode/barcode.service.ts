@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, UnprocessableEntityException } from "@nestjs/common";
 import sharp from "sharp";
 import { BarcodeDetectorService } from "./barcode-detector";
+import { renderTransparentBarcodePng } from "./barcode-alpha";
 import { StorageService } from "../storage/storage.service";
 import { sniffImageMime } from "../common/image-sniff";
 import { AssetOwnerType } from "../generated/prisma";
@@ -58,17 +59,17 @@ export class BarcodeService {
     const cropWidth = Math.max(1, right - left);
     const cropHeight = Math.max(1, bottom - top);
 
-    const cropped = sharp(file.buffer).extract({ left, top, width: cropWidth, height: cropHeight });
+    const croppedBuffer = await sharp(file.buffer).extract({ left, top, width: cropWidth, height: cropHeight }).png().toBuffer();
 
     const shorterEdge = Math.min(cropWidth, cropHeight);
     const scale = Math.min(MAX_UPSCALE_FACTOR, Math.max(1, MIN_OUTPUT_EDGE_PX / shorterEdge));
     const outputWidth = Math.round(cropWidth * scale);
     const outputHeight = Math.round(cropHeight * scale);
 
-    const output = await cropped
-      .resize(outputWidth, outputHeight, { kernel: sharp.kernel.lanczos3 })
-      .png({ quality: 100, palette: false })
-      .toBuffer();
+    // Only the barcode's own printed ink stays opaque — its background (and any sliver of the
+    // original paper/screen caught by the crop's margin) is rendered transparent, so the download
+    // is the barcode itself, not a rectangle of surrounding material with the barcode inside it.
+    const output = await renderTransparentBarcodePng(croppedBuffer, outputWidth, outputHeight);
 
     const asset = await this.storage.storeAsset({
       data: output,
