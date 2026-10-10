@@ -47,6 +47,12 @@ const MAX_ROLL_DEGREES = 15;
 const MAX_YAW_DEGREES = 12;
 /** Above this fraction of the output canvas being synthetic (padded, not photographed) fill, warn rather than pass silently. */
 const SYNTHETIC_FILL_WARN_FRACTION = 0.15;
+/**
+ * Margin the face-protection hull is expanded by, as a fraction of the detected face box's width —
+ * wide enough to swallow jaw/hairline estimation error and a little hair, narrow enough to stay
+ * well clear of the shoulders (which must remain free for the matte to cut around).
+ */
+const FACE_PROTECT_MARGIN_FRACTION = 0.3;
 
 /**
  * Turns an uploaded photo into a standard-compliant ID photo: auto white balance, auto exposure, a
@@ -82,7 +88,7 @@ export async function processIdPhoto(
   content = await applyWhiteBalance(content);
   content = await applyExposureNormalization(content);
 
-  const background = await replaceBackground(content, segmenter, real.width, real.height);
+  const background = await replaceBackground(content, segmenter, real.width, real.height, face, real.left, real.top);
 
   const placedWidth = Math.max(1, Math.round(real.width * scale));
   const placedHeight = Math.max(1, Math.round(real.height * scale));
@@ -132,6 +138,21 @@ export async function processIdPhoto(
       canvasBuffer[d + 2] = resizedRgb[s + 2]!;
       canvasBuffer[d + 3] = resizedAlpha[srcAlphaOffset + x]!;
     }
+  }
+  // Flatten onto the standard's required backdrop (plain white / light grey per standard), as the
+  // very last pixel step: the issuing authority's spec demands a solid backdrop, the synthetic
+  // fill regions (where the ideal crop extends past the photographed area) become that backdrop,
+  // and any residual partially-transparent edge pixel resolves onto the backdrop colour instead of
+  // showing as a hole. Subject RGB and alpha still travel through resize and placement separately
+  // (see the premultiply gotchas above) and are combined only here, once.
+  const [backdropR, backdropG, backdropB] = spec.background.rgb;
+  for (let i = 0; i < spec.outputWidthPx * spec.outputHeightPx; i++) {
+    const a = canvasBuffer[i * 4 + 3]! / 255;
+    const ia = 1 - a;
+    canvasBuffer[i * 4] = Math.round(canvasBuffer[i * 4]! * a + backdropR * ia);
+    canvasBuffer[i * 4 + 1] = Math.round(canvasBuffer[i * 4 + 1]! * a + backdropG * ia);
+    canvasBuffer[i * 4 + 2] = Math.round(canvasBuffer[i * 4 + 2]! * a + backdropB * ia);
+    canvasBuffer[i * 4 + 3] = 255;
   }
   const png = await sharp(canvasBuffer, { raw: { width: spec.outputWidthPx, height: spec.outputHeightPx, channels: 4 } })
     .png({ quality: 100, palette: false })
@@ -186,17 +207,116 @@ interface BackgroundResult {
   coverage: number;
 }
 
+interface Point {
+  x: number;
+  y: number;
+}
+
+/** Andrew's monotone-chain convex hull of a point set. */
+function convexHull(points: Point[]): Point[] {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (sorted.length < 3) return sorted;
+  const cross = (o: Point, a: Point, b: Point) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Point[] = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper: Point[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i]!;
+    while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+/** Expands every hull vertex outward from the hull's centroid by `margin` pixels. */
+function dilateHull(hull: Point[], margin: number): Point[] {
+  const centroidX = hull.reduce((sum, p) => sum + p.x, 0) / hull.length;
+  const centroidY = hull.reduce((sum, p) => sum + p.y, 0) / hull.length;
+  return hull.map((p) => {
+    const dx = p.x - centroidX;
+    const dy = p.y - centroidY;
+    const length = Math.hypot(dx, dy) || 1;
+    return { x: p.x + (dx / length) * margin, y: p.y + (dy / length) * margin };
+  });
+}
+
+/** Point-in-convex-polygon test that accepts either winding: the point is inside when every edge
+ *  turns the same way around it. */
+function pointInConvexPolygon(x: number, y: number, hull: Point[]): boolean {
+  let sign = 0;
+  for (let i = 0; i < hull.length; i++) {
+    const a = hull[i]!;
+    const b = hull[(i + 1) % hull.length]!;
+    const cross = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+    if (cross !== 0) {
+      const turn = Math.sign(cross);
+      if (sign === 0) sign = turn;
+      else if (turn !== sign) return false;
+    }
+  }
+  return true;
+}
+
 /**
- * Cuts the subject out of its background using real per-pixel person segmentation
- * (BodyPix/ResNet50) rather than a color-distance heuristic — it works against a patterned,
- * gradient, or off-color background, not just an already-plain one. The subject's own pixels are
- * never recolored: this only produces an alpha mask (the segmentation, feathered at the silhouette
- * edge) alongside the RGB data, kept separate rather than joined immediately — see the resize step
- * in processIdPhoto for why. Only trusted when the mask's coverage looks like a real single subject
- * (see SegmentationService); otherwise the content is returned unmodified and fully opaque, rather
- * than composited with a guess.
+ * Forces the alpha to fully opaque inside a dilated convex hull around the face's 68 landmarks —
+ * the belt-and-braces guarantee that no segmentation mistake, whatever model is behind it, can
+ * ever punch a transparent hole through the subject's face. The landmarks are already measured by
+ * the face detector this pipeline depends on, so this costs nothing but the rasterization. The
+ * hull is deliberately limited to the face (plus a margin): the shoulders and silhouette keep
+ * their soft matte edges. No-op when the face falls essentially outside this crop.
  */
-async function replaceBackground(pipeline: Sharp, segmenter: SegmentationService, width: number, height: number): Promise<BackgroundResult> {
+function protectFaceInAlpha(alpha: Buffer, width: number, height: number, landmarks: Point[], cropLeft: number, cropTop: number, faceWidth: number): void {
+  const inCrop = landmarks
+    .map((p) => ({ x: p.x - cropLeft, y: p.y - cropTop }))
+    .filter((p) => p.x >= 0 && p.x < width && p.y >= 0 && p.y < height);
+  if (inCrop.length < 3) return;
+
+  const hull = dilateHull(convexHull(inCrop), FACE_PROTECT_MARGIN_FRACTION * Math.max(1, faceWidth));
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const p of hull) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  const x0 = Math.max(0, Math.floor(minX));
+  const y0 = Math.max(0, Math.floor(minY));
+  const x1 = Math.min(width - 1, Math.ceil(maxX));
+  const y1 = Math.min(height - 1, Math.ceil(maxY));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (pointInConvexPolygon(x + 0.5, y + 0.5, hull)) alpha[y * width + x] = 255;
+    }
+  }
+}
+
+/**
+ * Cuts the subject out of its background using real per-pixel matting (BiRefNet-portrait via
+ * SegmentationService) rather than a color-distance heuristic — it works against a patterned,
+ * gradient, or off-color background, not just an already-plain one. The subject's own pixels are
+ * never recolored: this only produces an alpha mask (the matte, feathered at the silhouette edge
+ * and with the face-protection hull applied on top) alongside the RGB data, kept separate rather
+ * than joined immediately — see the resize step in processIdPhoto for why. Only trusted when the
+ * matte's coverage looks like a real single subject (see SegmentationService); otherwise the
+ * content is returned unmodified and fully opaque, rather than composited with a guess.
+ */
+async function replaceBackground(
+  pipeline: Sharp,
+  segmenter: SegmentationService,
+  width: number,
+  height: number,
+  face: DetectedFace,
+  cropLeft: number,
+  cropTop: number,
+): Promise<BackgroundResult> {
   const { data } = await pipeline.clone().removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const segmentation = await segmenter.segmentPerson(Buffer.from(data), width, height);
 
@@ -205,6 +325,9 @@ async function replaceBackground(pipeline: Sharp, segmenter: SegmentationService
     // Would silently misalign every pixel below (e.g. a mask that came back multi-channel) —
     // fail loudly instead of compositing garbage.
     throw new Error(`Segmentation mask size ${alpha.length} doesn't match ${width}x${height} (${width * height}).`);
+  }
+  if (segmentation.reliable) {
+    protectFaceInAlpha(alpha, width, height, face.landmarks, cropLeft, cropTop, face.box.width);
   }
 
   return { rgb: Buffer.from(data), alpha, applied: segmentation.reliable, coverage: segmentation.coverage };
@@ -295,9 +418,10 @@ async function buildComplianceReport(
   const headHeightFrac = headHeightPx / spec.outputHeightPx;
   const eyeLineFrac = ((face.eyeCenter.y - ideal.top) * scale) / spec.outputHeightPx;
 
-  // Brightness over the real PHOTOGRAPHED region only — the canvas can extend past it with fully
-  // transparent (RGB 0,0,0 at alpha 0) fill, which would otherwise drag a whole-canvas average down
-  // and fail a perfectly well-exposed photo for a framing reason that has nothing to do with exposure.
+  // Brightness over the real PHOTOGRAPHED region only — the canvas can extend past it with
+  // flat backdrop fill, which would otherwise drag a whole-canvas average toward the backdrop
+  // colour and misreport a well-exposed photo for a framing reason that has nothing to do
+  // with exposure.
   const stats = await sharp(png).extract(placement).stats();
   const brightness = stats.channels.slice(0, 3).reduce((s, c) => s + c.mean, 0) / 3;
 
@@ -315,7 +439,7 @@ async function buildComplianceReport(
       label: "Background",
       pass: background.applied,
       detail: background.applied
-        ? `Automatically cut out from the original background — delivered as a transparent PNG. When you print or submit it, use a ${spec.background.label} backdrop, as this standard requires.`
+        ? `Automatically cut out from the original background and composited onto the standard's required ${spec.background.label} backdrop.`
         : "Couldn't reliably separate you from the background in this photo — retake with more even lighting and a bit more space behind you.",
     },
     {
@@ -323,7 +447,7 @@ async function buildComplianceReport(
       pass: fillOk,
       detail: fillOk
         ? "Enough of the original photo was usable to fill the required frame."
-        : `About ${Math.round(syntheticFraction * 100)}% of this photo's frame is outside what the original photo actually showed, and was left transparent — retake a bit further back so there's more room around you.`,
+        : `About ${Math.round(syntheticFraction * 100)}% of this photo's frame is outside what the original photo actually showed, and was filled with the standard's backdrop — retake a bit further back so there's more room around you.`,
     },
     {
       label: "Head pose",

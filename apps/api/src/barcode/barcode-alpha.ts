@@ -1,9 +1,11 @@
 import sharp, { type Sharp } from "sharp";
 
-/** Feather blurred into the ink/background threshold so bar and text edges are anti-aliased in the
- *  output alpha, not jagged — kept small so it doesn't blur together a barcode's thin, closely
+/** Feather blurred into the ink/background threshold so bar and text edges are anti-aliased in
+ *  the ink mask, not jagged — kept small so it doesn't blur together a barcode's thin, closely
  *  spaced bars. */
 const ALPHA_FEATHER_SIGMA = 0.5;
+/** The exact backdrop the extracted barcode is composited onto: pure, fully-saturated white. */
+const BACKDROP_RGB: readonly [number, number, number] = [255, 255, 255];
 
 function toGrayscale(rgb: Buffer, width: number, height: number, channels: number): Uint8Array {
   const gray = new Uint8Array(width * height);
@@ -46,11 +48,11 @@ function otsuThreshold(gray: Uint8Array): number {
 }
 
 /**
- * Builds a 0/255 alpha mask marking a barcode's printed ink (bars, modules, label text) opaque and
- * everything else — the surrounding paper/screen background, and any quiet zone caught in the crop
- * — transparent. The split point comes from Otsu's method on the crop's own histogram; which side
- * of that split is "ink" is decided by pixel count (a barcode's background always covers more of
- * the crop than its printed content), so this works the same for dark-on-light or light-on-dark
+ * Builds a 0/255 ink mask marking a barcode's printed content (bars, modules, label text) as ink
+ * and everything else — the surrounding paper/screen background, and any quiet zone caught in the
+ * crop — as backdrop. The split point comes from Otsu's method on the crop's own histogram; which
+ * side of that split is "ink" is decided by pixel count (a barcode's background always covers more
+ * of the crop than its printed content), so this works the same for dark-on-light or light-on-dark
  * barcodes without needing to know which in advance.
  */
 function computeInkAlphaMask(gray: Uint8Array): Uint8Array {
@@ -84,13 +86,16 @@ async function maskOp(input: Buffer, width: number, height: number, apply: (img:
 }
 
 /**
- * Renders a barcode crop as a transparent PNG containing only its printed ink — resized (typically
- * upscaled) to the given output dimensions. RGB and alpha are resized as separate raw buffers and
- * combined with a manual per-pixel paste rather than sharp's own `.resize()`+`.composite()`, which
- * silently premultiply RGB by alpha during processing and can under-correct back out of it,
- * darkening colors proportional to transparency.
+ * Renders a barcode crop as a fully opaque PNG of its printed ink over an exact pure-white
+ * backdrop — resized (typically upscaled) to the given output dimensions. The ink keeps its own
+ * colour (a red-on-white barcode stays red); the original paper/screen background and any quiet
+ * zone caught by the crop become the flat white backdrop, so the download is a clean, print-ready
+ * image of the barcode itself rather than a rectangle of whatever surrounded it. The composite is
+ * done manually per pixel, over separately-resized RGB and mask buffers, rather than sharp's own
+ * `.resize()`+`.composite()`, which silently premultiplies RGB by alpha during processing and can
+ * under-correct back out of it, darkening colours in proportion to their transparency.
  */
-export async function renderTransparentBarcodePng(cropBuffer: Buffer, outputWidth: number, outputHeight: number): Promise<Buffer> {
+export async function renderWhiteBackedBarcodePng(cropBuffer: Buffer, outputWidth: number, outputHeight: number): Promise<Buffer> {
   const { data, info } = await sharp(cropBuffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const { width, height, channels } = info;
 
@@ -115,10 +120,15 @@ export async function renderTransparentBarcodePng(cropBuffer: Buffer, outputWidt
 
   const canvas = Buffer.alloc(outputWidth * outputHeight * 4);
   for (let i = 0; i < outputWidth * outputHeight; i++) {
-    canvas[i * 4] = resizedRgb[i * 3]!;
-    canvas[i * 4 + 1] = resizedRgb[i * 3 + 1]!;
-    canvas[i * 4 + 2] = resizedRgb[i * 3 + 2]!;
-    canvas[i * 4 + 3] = resizedAlpha[i]!;
+    // Standard source-over compositing of the (feathered) ink over the flat white backdrop:
+    // out = ink*mask + white*(1 - mask). The feathered mask anti-aliases the bar/text edges, and
+    // the fully-covered backdrop makes the output opaque end to end — an "exact white background".
+    const a = resizedAlpha[i]! / 255;
+    const ia = 1 - a;
+    canvas[i * 4] = Math.round(resizedRgb[i * 3]! * a + BACKDROP_RGB[0] * ia);
+    canvas[i * 4 + 1] = Math.round(resizedRgb[i * 3 + 1]! * a + BACKDROP_RGB[1] * ia);
+    canvas[i * 4 + 2] = Math.round(resizedRgb[i * 3 + 2]! * a + BACKDROP_RGB[2] * ia);
+    canvas[i * 4 + 3] = 255;
   }
 
   return sharp(canvas, { raw: { width: outputWidth, height: outputHeight, channels: 4 } })

@@ -31,8 +31,10 @@ function binary(res: request.Test) {
 /**
  * The ID photo editor: real face-landmark detection (SSD Mobilenet v1 + 68-point landmarks, no
  * stub) drives an auto-crop to the chosen standard's head-size/eye-line spec, auto white
- * balance/exposure, real deep-segmentation background replacement (BodyPix/ResNet50), and
- * head-tilt leveling — verified end to end against real photos through the actual worker.
+ * balance/exposure, real deep-matting background replacement (BiRefNet-portrait via
+ * onnxruntime, with the landmark-derived face-protection hull) composited onto the standard's
+ * required backdrop colour, and head-tilt leveling — verified end to end against real photos
+ * through the actual worker.
  */
 describe("ID photo editor", () => {
   let app: INestApplication;
@@ -110,10 +112,30 @@ describe("ID photo editor", () => {
     const meta = await sharp(download.body as Buffer).metadata();
     expect(meta.width).toBe(600);
     expect(meta.height).toBe(600);
-    // A real transparent cutout, not a flattened opaque photo — and losslessly encoded, not
-    // silently quantized to a palette (both would count as altering the image).
-    expect(meta.hasAlpha).toBe(true);
+    // Composited onto the standard's required plain-white backdrop, fully opaque end to end, and
+    // losslessly encoded — not silently quantized to a palette (which would count as altering it).
     expect(meta.isPalette).toBe(false);
+    const raw = await sharp(download.body as Buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const { data, info } = raw;
+    const alphaOffset = info.channels - 1; // alpha is the last channel in every layout sharp emits here
+    // Backdrop: exact pure white at every corner of the canvas — both the replaced original
+    // background and any synthetic fill land on the standard's required backdrop colour.
+    for (const [x, y] of [[0, 0], [info.width - 1, 0], [0, info.height - 1], [info.width - 1, info.height - 1]] as const) {
+      const p = (y * info.width + x) * info.channels;
+      expect(data[p]).toBe(255);
+      expect(data[p + 1]).toBe(255);
+      expect(data[p + 2]).toBe(255);
+    }
+    // The subject survived the cutout intact: real area of non-backdrop pixels (the person),
+    // and full opacity everywhere — no transparent hole punched through the subject.
+    let nonBackdropCount = 0;
+    let nonOpaqueCount = 0;
+    for (let p = 0; p < data.length; p += info.channels) {
+      if (data[p + alphaOffset]! < 255) nonOpaqueCount++;
+      if (data[p]! < 250 || data[p + 1]! < 250 || data[p + 2]! < 250) nonBackdropCount++;
+    }
+    expect(nonOpaqueCount).toBe(0);
+    expect(nonBackdropCount).toBeGreaterThan(info.width * info.height * 0.05);
   }, 30_000);
 
   it("processes the same photo into a spec-exact ICAO photo, a different aspect ratio and target proportions", async () => {

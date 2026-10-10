@@ -107,6 +107,18 @@ jobs:
       - name: Run database migrations
         run: pnpm --filter @psd-studio/api run prisma:deploy
 
+      # The ID-photo pipeline's BiRefNet-portrait matting model (~490MB) is fetched rather than
+      # vendored (GitHub's 100MB per-file limit). The fetch script is pinned and verifies the
+      # SHA-256, and the cache key derives from the script itself, so bumping the pin re-downloads.
+      - name: Cache matting model
+        uses: actions/cache@v4
+        with:
+          path: apps/api/.models
+          key: matting-${{ hashFiles('apps/api/scripts/fetch-matting-model.mjs') }}
+
+      - name: Fetch matting model
+        run: pnpm --filter @psd-studio/api run fetch-models
+
       - name: API integration tests (builds the API, then runs against real Postgres/Redis)
         run: pnpm run test:api
 

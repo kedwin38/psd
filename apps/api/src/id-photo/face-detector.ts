@@ -46,6 +46,13 @@ export interface DetectedFace {
    * spirit as the crown-height estimate below.
    */
   estimatedYawDegrees: number;
+  /**
+   * All 68 landmark points in source pixel coordinates (jaw 0-16, brows 17-26, nose 27-35, eyes
+   * 36-47, mouth 48-67) — the raw geometry downstream steps can build on, in the same coordinate
+   * frame as `box`. The ID-photo pipeline uses it to construct the convex face-protection hull
+   * that no segmentation mistake is ever allowed to punch through.
+   */
+  landmarks: { x: number; y: number }[];
 }
 
 let modelsLoaded: Promise<void> | null = null;
@@ -155,6 +162,8 @@ export class FaceDetectorService {
     const mar = mouthAspectRatio(landmarks.getMouth());
     const noseBridge = landmarks.getNose()[3]!; // lowest point of the nose bridge, just above the nostrils
     const yaw = estimateYaw(leftEyePoints[0]!, rightEyePoints[3]!, noseBridge);
+    // The full 68-point geometry, rescaled to source pixels exactly like every derived metric above.
+    const allLandmarks = landmarks.positions.map((p) => ({ x: p.x * inv, y: p.y * inv }));
 
     this.logger.debug(`Face detected at score ${result.detection.score.toFixed(2)}, EAR ${ear.toFixed(2)}, MAR ${mar.toFixed(2)}, yaw~${yaw.toFixed(1)}°`);
 
@@ -171,6 +180,7 @@ export class FaceDetectorService {
       mouthAspectRatio: mar,
       mouthClosed: mar <= MAR_CLOSED_THRESHOLD,
       estimatedYawDegrees: yaw,
+      landmarks: allLandmarks,
     };
   }
 }

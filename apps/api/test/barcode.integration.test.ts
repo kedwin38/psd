@@ -25,9 +25,9 @@ function binary(res: request.Test) {
 /**
  * Barcode paste-and-extract: a real ZXing decode (Code128, no stub) locates the barcode inside a
  * pasted image that has substantial extra surrounding material, crops down to just the barcode
- * (with a small quiet-zone margin), upscales it, and offers a lossless, truly transparent PNG
- * download (only the printed ink is opaque — no background rectangle around it) — verified against
- * a real synthetic barcode photo through the actual HTTP endpoint.
+ * (with a small quiet-zone margin), upscales it, and offers a crisp PNG download of the printed
+ * ink over an exact pure-white background (no surrounding-material rectangle around it) —
+ * verified against a real synthetic barcode photo through the actual HTTP endpoint.
  */
 describe("Barcode extraction", () => {
   let app: INestApplication;
@@ -75,17 +75,25 @@ describe("Barcode extraction", () => {
     expect(meta.isPalette).toBe(false);
     expect(meta.width).toBe(res.body.width);
     expect(meta.height).toBe(res.body.height);
-    // A real transparent cutout of just the barcode's printed ink, not an opaque rectangle with
-    // the barcode inside it: the fixture's outer crop pixels (its light-grey paper background) must
-    // be transparent, and there must be real opaque ink somewhere inside (the barcode itself).
-    expect(meta.hasAlpha).toBe(true);
+    // The barcode's ink over an exact white backdrop, not a rectangle of the original surrounding
+    // material: the fixture's outer crop pixels (its light-grey paper background) must be pure
+    // white, the image must be fully opaque end to end, and there must be real ink somewhere
+    // inside (the barcode itself) that isn't white.
     const raw = await sharp(download.body as Buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     const { data, info } = raw;
-    const corner = data[3];
-    expect(corner).toBeLessThan(40);
-    let opaqueCount = 0;
-    for (let i = 3; i < data.length; i += info.channels) if (data[i]! > 200) opaqueCount++;
-    expect(opaqueCount).toBeGreaterThan(0);
+    const cornerOffset = (info.channels === 4 ? 3 : info.channels - 1); // alpha last in every layout sharp emits here
+    expect(data[0]).toBe(255);
+    expect(data[1]).toBe(255);
+    expect(data[2]).toBe(255);
+    let inkCount = 0;
+    let nonOpaqueCount = 0;
+    for (let i = 0, p = 0; i < info.width * info.height; i++, p += info.channels) {
+      if (data[p + cornerOffset]! < 255) nonOpaqueCount++;
+      // Any channel meaningfully below white counts as ink (the fixture's Code128 is near-black).
+      if (data[p]! < 200 || data[p + 1]! < 200 || data[p + 2]! < 200) inkCount++;
+    }
+    expect(nonOpaqueCount).toBe(0);
+    expect(inkCount).toBeGreaterThan(0);
   }, 20_000);
 
   it("fails clearly, without a fake success, when no barcode is present", async () => {
