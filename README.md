@@ -63,6 +63,8 @@ any reachable instance).
 pnpm install
 cp .env.example .env          # then edit apps/api/.env or export the same vars
 pnpm --filter @psd-studio/api run prisma:migrate
+pnpm --filter @psd-studio/api run fetch-models   # one-time ~490MB: the ID-photo matting model
+                                                 # (sha256-pinned; too large to vendor in git)
 
 pnpm --filter @psd-studio/api run build
 pnpm --filter @psd-studio/api run start          # API on :3000
@@ -105,6 +107,7 @@ pnpm --filter @psd-studio/api run prisma:generate
 pnpm run typecheck   # every package
 pnpm run test:unit   # scene-graph + psd-engine + canvas-renderer — pure logic, no services needed
 pnpm run test:api    # NestJS integration tests — builds the API, needs Postgres + Redis
+                      # and the matting model fetched (fetch-models above)
 pnpm run test:e2e    # Playwright, drives the real app end-to-end — needs
                       # Postgres, Redis, the API, the worker, and a web
                       # build all running (see the e2e job in .github/workflows/ci.yml)
@@ -230,6 +233,21 @@ drive mouse, wheel, keyboard and Space+drag.)
   re-file templates, replace a template's PSD (a new version, live when
   published) and delete templates and empty categories behind step-up;
   projects started from a deleted template keep working.
+- An ID photo pipeline that turns a candid photo into a standard-compliant
+  passport/ID photo: face-landmark-driven crop that hits the standard's head-size
+  and eye-line targets exactly (extending the canvas with the standard's backdrop
+  when the source is framed too tight), head-tilt auto-leveling, white balance
+  and exposure correction, and a real deep-matting background replacement —
+  BiRefNet-portrait via onnxruntime, running locally in the worker — with a
+  landmark-derived face-protection hull so no segmentation mistake can ever
+  punch a transparent hole through the face, composited onto the standard's
+  required backdrop colour. Every compliance check (head size, eye position,
+  pose, eyes/mouth, sharpness, lighting, brightness) is measured against the
+  final output pixels, not the input.
+- A barcode paste-and-extract tool: paste, drop or pick any image, ZXing decodes
+  the barcode, the crop region is grown content-adaptively to the barcode's true
+  printed boundary, and the download is a crisp upscaled PNG of just the
+  barcode's ink over an exact white background.
 
 ## Known scope limits (stated up front, not discovered later)
 

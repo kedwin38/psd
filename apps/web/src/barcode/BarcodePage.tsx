@@ -173,7 +173,7 @@ export function BarcodePage() {
         )}
         {result && (
           <div className="stack">
-            {resultPreview && <img src={resultPreview} alt="Extracted barcode" className="id-photo-result-preview checkerboard" />}
+            {resultPreview && <img src={resultPreview} alt="Extracted barcode" className="id-photo-result-preview" />}
             <ul className="id-photo-checklist">
               <li className="pass">
                 <CheckCircle2 size={15} aria-hidden="true" />

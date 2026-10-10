@@ -15,3 +15,5 @@ storage-data/
 playwright-report/
 test-results/
 *.rdb
+# Fetched matting model weights — too large to vendor; see apps/api/scripts/fetch-matting-model.mjs
+/apps/api/.models/

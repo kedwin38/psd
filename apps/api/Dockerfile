@@ -26,6 +26,12 @@ RUN pnpm --filter @psd-studio/scene-graph run build \
   && cp -r apps/api/src/generated apps/api/dist/generated \
   && cp -r apps/api/models apps/api/dist/models
 
+# Fetch the BiRefNet-portrait fp16 matting model (~490MB, sha256-pinned) into apps/api/.models —
+# too large to vendor in git (GitHub's 100MB per-file limit), so the image build downloads and
+# verifies it. The runtime stage copies it in explicitly; matting.ts resolves it relative to
+# dist/id-photo (-> /app/.models).
+RUN pnpm --filter @psd-studio/api run fetch-models
+
 # --- deploy: resolve a self-contained, production-only package directory ---
 FROM build AS deploy
 RUN pnpm --filter @psd-studio/api deploy --prod --legacy /deploy
@@ -39,6 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl fonts-l
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=deploy /deploy .
+COPY --from=build /repo/apps/api/.models /app/.models
 RUN mkdir -p storage-data
-EXPOSE 3000
+# No EXPOSE: platform routing comes from the deploy spec's http_port/internal_ports, and an
+# EXPOSEd port makes some platforms (DigitalOcean App Platform) probe it with a TCP readiness
+# check — which a queue worker that never listens would always fail.
 CMD ["node", "dist/main.js"]

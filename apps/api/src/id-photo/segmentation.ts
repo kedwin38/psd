@@ -1,38 +1,18 @@
 import { Injectable, Logger } from "@nestjs/common";
-import * as tf from "@tensorflow/tfjs-node";
-import * as bodyPix from "@tensorflow-models/body-pix";
 import sharp, { type Sharp } from "sharp";
-import { join } from "node:path";
+import { inferMatte } from "./matting";
 
-// dist/id-photo/segmentation.js -> dist/models/segmentation (see package.json's build script and
-// Dockerfile, which both copy apps/api/models alongside src/generated into dist/).
-const MODEL_JSON_PATH = join(__dirname, "..", "models", "segmentation", "model-stride16.json");
 /**
- * Fraction of the frame the segmented subject must occupy for the mask to be trusted. Below this,
+ * Fraction of the frame the segmented subject must occupy for the matte to be trusted. Below this,
  * nothing was really found (an empty room, a wall); above the upper bound the "background" is
  * nearly the whole frame, which usually means the subject fills it edge-to-edge and there's no
- * background left to correct — either way, the mask isn't a safe basis for compositing.
+ * background left to correct — either way, the matte isn't a safe basis for compositing.
  */
 const MIN_RELIABLE_COVERAGE = 0.04;
 const MAX_RELIABLE_COVERAGE = 0.97;
-/** Blur radius (px) feathered into the final mask so the composite edge is anti-aliased, not jagged. */
+/** Blur radius (px) feathered into the final alpha so the composite edge is anti-aliased, not
+ *  jagged — applied to the soft matte, which is already smooth, so this is a light touch. */
 const MASK_FEATHER_SIGMA = 1.2;
-/**
- * Median filter window (px) run over the binary mask first. Low-contrast boundaries — a light
- * garment against a light wall, say — make BodyPix's per-pixel classification flicker
- * pixel-to-pixel near the edge; a median filter is the standard fix for exactly this kind of
- * salt-and-pepper noise.
- */
-const MASK_DENOISE_WINDOW = 9;
-/**
- * Morphological "closing" (a blur-then-rebinarize pass) run after denoising, to bridge the small
- * gaps a low-contrast boundary leaves in an otherwise-solid silhouette (a scalloped/bitten-looking
- * edge along a shoulder, say) without moving the real edge. MASK_CLOSE_THRESHOLD is deliberately
- * below the neutral midpoint (128): after a blur, a pixel surrounded mostly by foreground reads as
- * a mid-grey around ~130-180, so a lower cutoff resolves "mostly surrounded by person" as person.
- */
-const MASK_CLOSE_BLUR_SIGMA = 12;
-const MASK_CLOSE_THRESHOLD = 90;
 
 export interface SegmentationResult {
   /** Single-channel alpha buffer (0-255), same WxH as the input: 255 = subject, 0 = background,
@@ -40,20 +20,19 @@ export interface SegmentationResult {
   alpha: Buffer;
   width: number;
   height: number;
-  /** Fraction of pixels classified as the subject, before feathering. */
+  /** Mean alpha over the frame (0-1), the soft-matte equivalent of "fraction classified subject". */
   coverage: number;
-  /** False when coverage looks degenerate enough that the mask probably isn't trustworthy. */
+  /** False when coverage looks degenerate enough that the matte probably isn't trustworthy. */
   reliable: boolean;
 }
 
 /**
- * Keeps only the mask's largest 4-connected blob and zeroes out every other one. BodyPix
- * occasionally misclassifies a small, disconnected patch elsewhere in the frame (a shadow, a
- * texture in the background) as "person" — a real defect ("leaving patches on the image"), not
- * noise a blur or median filter would catch, since a stray patch can itself be solid and
- * contiguous. The subject is, by construction, the largest contiguous region in any photo where
- * segmentation is trustworthy at all (that's what "reliable" coverage already means), so this is a
- * safe, image-specific decision rather than a fixed rule.
+ * Keeps only the mask's largest 4-connected blob and zeroes out every other one. Even a strong
+ * matting model can leave a small, disconnected patch elsewhere in the frame (a shadow, a texture
+ * in the background) scored as foreground — a real defect, not noise a blur would catch, since a
+ * stray patch can itself be solid and contiguous. The subject is, by construction, the largest
+ * contiguous region in any photo where segmentation is trustworthy at all (that's what "reliable"
+ * coverage already means), so this is a safe, image-specific decision rather than a fixed rule.
  */
 function keepLargestComponent(mask: Uint8Array, width: number, height: number): Uint8Array {
   const n = width * height;
@@ -104,11 +83,10 @@ function keepLargestComponent(mask: Uint8Array, width: number, height: number): 
 /**
  * Fills every "background" region the mask has that isn't actually reachable from the photo's
  * edge — a real background pixel can always be traced back to the frame border by only crossing
- * other background pixels; anything BodyPix marked as background but sealed off entirely inside the
- * foreground (a hole punched in the middle of a face or a chest, say, from a confusing shadow or
- * fabric pattern) is topologically impossible as real background and can only be a misclassification.
- * A person's photo is one solid, hole-free object; this makes the mask agree, regardless of how
- * large the hole is — unlike a blur/closing pass, which only bridges small gaps.
+ * other background pixels; anything the model marked as background but sealed off entirely inside
+ * the foreground (a hole punched in the middle of a face or a chest, say) is topologically
+ * impossible as real background and can only be a misclassification. A person's photo is one
+ * solid, hole-free object; this makes the mask agree, regardless of how large the hole is.
  */
 function fillEnclosedHoles(mask: Uint8Array, width: number, height: number): Uint8Array {
   const n = width * height;
@@ -175,67 +153,60 @@ async function maskOp(input: Buffer, width: number, height: number, apply: (img:
   return out;
 }
 
-let netPromise: Promise<bodyPix.BodyPix> | null = null;
-
-/**
- * BodyPix's ResNet50 variant, loaded once per process from the vendored weights on disk (not
- * fetched at request time — same reasoning as the vendored face-landmark models: no runtime
- * network dependency, no risk of a shard truncating mid-download under load). ResNet50 is the
- * more accurate of BodyPix's two backbones; MobileNet trades accuracy for a size/speed this
- * server-side batch job doesn't need to make.
- */
-function loadNet(): Promise<bodyPix.BodyPix> {
-  netPromise ??= bodyPix.load({
-    architecture: "ResNet50",
-    outputStride: 16,
-    quantBytes: 4,
-    // body-pix's own ModelConfig types modelUrl as `string`, but it's passed straight through to
-    // tf.loadGraphModel, which also accepts an IOHandler (tf.io.fileSystem) at runtime — a gap in
-    // body-pix's types, not an actual type mismatch.
-    modelUrl: tf.io.fileSystem(MODEL_JSON_PATH) as unknown as string,
-  });
-  return netPromise;
-}
-
 @Injectable()
 export class SegmentationService {
   private readonly logger = new Logger(SegmentationService.name);
 
   /**
-   * Segments the foreground subject out of an RGB (no alpha) raw buffer — real per-pixel deep
-   * segmentation, not a color-distance heuristic, so it works against any background: patterned,
-   * gradient, or a color close to the subject's own clothing or skin tone.
+   * Cuts the foreground subject out of an RGB (no alpha) raw buffer using BiRefNet-portrait — a
+   * high-resolution dichotomous segmentation / matting network running via onnxruntime — rather
+   * than a color-distance heuristic or a coarse per-part classifier. The model returns a *soft*
+   * per-pixel foreground probability (a matte), which is what keeps hair, garment edges and other
+   * fine structure intact through the composite; the safety nets below only harden it where a
+   * yes/no answer is genuinely needed:
+   *
+   * 1. binarize at the midpoint purely to drive the connected-component analysis;
+   * 2. keep the subject's largest connected component (kill stray islands);
+   * 3. fill enclosed holes (kill punched-through face/chest patches);
+   * 4. recombine: outside the kept component → 0, reclassified hole pixels → 255, everywhere
+   *    else → the model's own soft value, so the silhouette keeps its anti-aliased edge.
+   *
+   * The previous BodyPix pipeline needed median denoising and a morphological closing pass
+   * because per-pixel binary classification flickers at low-contrast boundaries; a matte carries
+   * that uncertainty in its own values, so those crutches (which could also bite chunks off the
+   * subject's own edge) are gone.
    */
   async segmentPerson(rgb: Buffer, width: number, height: number): Promise<SegmentationResult> {
-    const net = await loadNet();
-    const tensor = tf.tensor3d(new Uint8Array(rgb), [height, width, 3]);
-    let result: bodyPix.SemanticPersonSegmentation;
-    try {
-      result = await net.segmentPerson(tensor as unknown as Parameters<typeof net.segmentPerson>[0], {
-        internalResolution: "full",
-        segmentationThreshold: 0.65,
-      });
-    } finally {
-      tensor.dispose();
+    const matte = await inferMatte(rgb, width, height);
+    const n = width * height;
+    if (matte.alpha.length !== n) {
+      throw new Error(`Matte size ${matte.alpha.length} doesn't match ${width}x${height} (${n}).`);
     }
 
     let sum = 0;
-    for (const v of result.data) sum += v;
-    const coverage = sum / result.data.length;
+    for (const v of matte.alpha) sum += v;
+    const coverage = sum / (n * 255);
     const reliable = coverage >= MIN_RELIABLE_COVERAGE && coverage <= MAX_RELIABLE_COVERAGE;
 
-    const binary = Buffer.from(result.data.map((v) => (v ? 255 : 0)));
-    let alpha: Buffer = binary;
+    let alpha = matte.alpha;
     if (reliable) {
-      const singleBlob = keepLargestComponent(new Uint8Array(binary), result.width, result.height);
-      const holesFilled = Buffer.from(fillEnclosedHoles(singleBlob, result.width, result.height));
-      const denoised = await maskOp(holesFilled, result.width, result.height, (img) => img.median(MASK_DENOISE_WINDOW));
-      const closedBlur = await maskOp(denoised, result.width, result.height, (img) => img.blur(MASK_CLOSE_BLUR_SIGMA));
-      const closed = await maskOp(closedBlur, result.width, result.height, (img) => img.threshold(MASK_CLOSE_THRESHOLD));
-      alpha = await maskOp(closed, result.width, result.height, (img) => img.blur(MASK_FEATHER_SIGMA));
+      const soft = new Uint8Array(matte.alpha);
+      const binary = new Uint8Array(n);
+      for (let i = 0; i < n; i++) binary[i] = soft[i]! >= 128 ? 255 : 0;
+
+      const singleBlob = keepLargestComponent(binary, width, height);
+      const holesFilled = fillEnclosedHoles(singleBlob, width, height);
+
+      const combined = Buffer.alloc(n);
+      for (let i = 0; i < n; i++) {
+        if (!holesFilled[i]!) combined[i] = 0; // outside the subject entirely
+        else if (singleBlob[i]!) combined[i] = soft[i]!; // the model's own soft edge
+        else combined[i] = 255; // an enclosed hole reclassified as subject — protect it fully
+      }
+      alpha = await maskOp(combined, width, height, (img) => img.blur(MASK_FEATHER_SIGMA));
     }
 
-    this.logger.debug(`Segmented person: coverage ${(coverage * 100).toFixed(1)}%, reliable=${reliable}`);
-    return { alpha, width: result.width, height: result.height, coverage, reliable };
+    this.logger.debug(`Matted person: mean coverage ${(coverage * 100).toFixed(1)}%, reliable=${reliable}`);
+    return { alpha, width, height, coverage, reliable };
   }
 }

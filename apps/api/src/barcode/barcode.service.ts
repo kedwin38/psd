@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, UnprocessableEntityException } from "@nestjs/common";
 import sharp from "sharp";
 import { BarcodeDetectorService } from "./barcode-detector";
-import { renderTransparentBarcodePng } from "./barcode-alpha";
+import { renderWhiteBackedBarcodePng } from "./barcode-alpha";
 import { StorageService } from "../storage/storage.service";
 import { sniffImageMime } from "../common/image-sniff";
 import { AssetOwnerType } from "../generated/prisma";
@@ -66,10 +66,11 @@ export class BarcodeService {
     const outputWidth = Math.round(cropWidth * scale);
     const outputHeight = Math.round(cropHeight * scale);
 
-    // Only the barcode's own printed ink stays opaque — its background (and any sliver of the
-    // original paper/screen caught by the crop's margin) is rendered transparent, so the download
-    // is the barcode itself, not a rectangle of surrounding material with the barcode inside it.
-    const output = await renderTransparentBarcodePng(croppedBuffer, outputWidth, outputHeight);
+    // The barcode's own printed ink is kept in its own colour; its background (and any sliver of
+    // the original paper/screen caught by the crop's margin) is replaced by an exact, flat white
+    // backdrop — a clean, print-ready image of the barcode itself, not a rectangle of surrounding
+    // material with the barcode inside it.
+    const output = await renderWhiteBackedBarcodePng(croppedBuffer, outputWidth, outputHeight);
 
     const asset = await this.storage.storeAsset({
       data: output,
